@@ -8,3 +8,5 @@ arxiv
 sqlalchemy
 psycopg2-binary
 pgvector
+tqdm
+types-tqdm
