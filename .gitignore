@@ -223,6 +223,12 @@ __marimo__/
 data/*
 !data/.gitkeep
 
+# Phase 2 generated artifacts (large; never commit)
+*.parquet
+*.npy
+*.npz
+reference_sample_ids.txt
+
 # Models and Cache
 *.model
 *.ckpt
