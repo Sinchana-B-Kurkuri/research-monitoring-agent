@@ -22,3 +22,9 @@
 - **Reference sample**: 5,000 papers selected with `numpy.random.default_rng(seed=42)`. The seed and size are configurable via `.env`. The same corpus + seed always produces the same IDs. Reference papers are marked `is_reference=True` in the corpus and their IDs are written to `data/reference_sample_ids.txt`.
 - **Human-labelling frame**: Reference papers are explicitly excluded from `get_labelling_frame()` to prevent contamination of future threshold calibration.
 - **Large artifacts not committed**: `*.parquet`, `*.npy`, `*.npz`, and `reference_sample_ids.txt` are gitignored.
+
+## Phase 3 — PostgreSQL + pgvector
+- **Database**: Introduced local PostgreSQL + pgvector via Docker Compose (`pgvector/pgvector:pg16`).
+- **ORM**: SQLAlchemy is used for basic model mapping and bulk insertion. No Alembic migrations yet as the schema is simple and initial.
+- **Artifact Preservation**: The Phase 2 Parquet and NumPy artifacts are loaded into the database but preserved as the original source of truth. 
+- **Vector Search**: The `embedding` column uses pgvector's `Vector(384)`. Native operators like `<->` (L2 distance) are supported, but formal vector indices (e.g. HNSW/IVFFlat) are omitted at this scale per roadmap constraints.
