@@ -28,3 +28,28 @@
 - **ORM**: SQLAlchemy is used for basic model mapping and bulk insertion. No Alembic migrations yet as the schema is simple and initial.
 - **Artifact Preservation**: The Phase 2 Parquet and NumPy artifacts are loaded into the database but preserved as the original source of truth. 
 - **Vector Search**: The `embedding` column uses pgvector's `Vector(384)`. Native operators like `<->` (L2 distance) are supported, but formal vector indices (e.g. HNSW/IVFFlat) are omitted at this scale per roadmap constraints.
+
+## Phase 4 — Ground Truth, Baselines, and Threshold Calibration
+- **Evaluation Sampling Frame**: Evaluation papers are drawn strictly from the 5,000 non-reference corpus papers (`is_reference=False`), guaranteeing zero contamination of the reference sample.
+- **Reference-Percentile Strata**: Evaluation papers are partitioned into five strata defined by the reference score percentiles:
+  - S1: $\ge P98$ (100 papers, default region: HIGH)
+  - S2: $P90 - P98$ (120 papers, default region: BORDERLINE)
+  - S3: $P75 - P90$ (100 papers, default region: LOW)
+  - S4: $P50 - P75$ (80 papers, default region: LOW)
+  - S5: $< P50$ (100 papers, default region: LOW)
+  Total sample = 500 papers. Sampling weight $w_h = N_h / n_h$ guarantees exact population reproduction ($\sum n_h w_h = 5,000$).
+- **Dev / Test Split**: 70% development (350 papers) and 30% test (150 papers) split within each stratum with a fixed seed (`seed=42`).
+- **Frozen Test Set & Audit Logging**: The test split is frozen before calibration. Every test set access is audited in `experiments/results/test_access.log`.
+- **Three-Point Ground Truth Labels**: Human labels support three categories: `relevant`, `somewhat`, and `not_relevant`. Never fabricate artificial model predictions as ground truth.
+- **Primary vs. Lenient Mappings**: Primary binary mapping treats `relevant=1`, `somewhat=0`, `not_relevant=0`. Lenient mapping treats `relevant=1`, `somewhat=1`, `not_relevant=0`.
+- **Threshold Calibration**:
+  - Calibrated strictly on the development split using the Section 7.2 objective:
+    - Choose the smallest $P_{\text{high}}$ with weighted HIGH precision $\ge 0.80$.
+    - Choose the largest $P_{\text{low}} < P_{\text{high}}$ with weighted LOW miss rate $\le 0.10$ (aiming for $\le 0.05$).
+  - Provisional levels before calibration are preserved: $P_{\text{high}} = 98$, $P_{\text{low}} = 90$.
+  - Calibrated levels are stored in configuration and documentation.
+- **Baselines**:
+  - B0: Random routing baseline at matched volume.
+  - B1: Keyword/TF-IDF cosine similarity to seed-interest text.
+  - B2: Embedding cosine similarity to fixed seed vector.
+- **Data Protection**: `data/labels/` CSV backups and `experiments/results/*.log` are gitignored to prevent leaking human labels or access history.

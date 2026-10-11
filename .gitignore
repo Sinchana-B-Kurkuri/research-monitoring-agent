@@ -229,6 +229,11 @@ data/*
 *.npz
 reference_sample_ids.txt
 
+# Phase 4 evaluation artifacts & labels (never commit ground-truth labels or test logs)
+data/labels/
+experiments/results/*.log
+experiments/results/test_access.log
+
 # Models and Cache
 *.model
 *.ckpt

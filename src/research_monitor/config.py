@@ -30,6 +30,45 @@ class Config:
     # Sentence Transformer model (Phase 1+)
     EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
 
+    # Phase 4: Threshold Calibration and Evaluation
+    # Provisional levels before calibration (Section 7.2 of Roadmap)
+    PROVISIONAL_P_HIGH = float(os.getenv("PROVISIONAL_P_HIGH", "98.0"))
+    PROVISIONAL_P_LOW = float(os.getenv("PROVISIONAL_P_LOW", "90.0"))
+
+    # Calibrated levels (populated from dev-split calibration or environment)
+    CALIBRATED_P_HIGH = (
+        float(os.getenv("CALIBRATED_P_HIGH"))
+        if os.getenv("CALIBRATED_P_HIGH")
+        else None
+    )
+    CALIBRATED_P_LOW = (
+        float(os.getenv("CALIBRATED_P_LOW"))
+        if os.getenv("CALIBRATED_P_LOW")
+        else None
+    )
+
+    # Calibration targets (Section 7.2)
+    CALIBRATION_TARGET_PRECISION = float(os.getenv("CALIBRATION_TARGET_PRECISION", "0.80"))
+    CALIBRATION_TARGET_MISS_RATE = float(os.getenv("CALIBRATION_TARGET_MISS_RATE", "0.10"))
+
+    # Evaluation sampling settings (Section 8.1)
+    EVALUATION_SAMPLE_SIZE = int(os.getenv("EVALUATION_SAMPLE_SIZE", "500"))
+    EVALUATION_DEV_RATIO = float(os.getenv("EVALUATION_DEV_RATIO", "0.70"))
+    EVALUATION_SEED = int(os.getenv("EVALUATION_SEED", "42"))
+
+    # Access logging
+    TEST_ACCESS_LOG_PATH = os.getenv("TEST_ACCESS_LOG_PATH", "experiments/results/test_access.log")
+
+    @property
+    def active_p_high(self) -> float:
+        """Returns calibrated P_high if set, otherwise provisional P_high."""
+        return self.CALIBRATED_P_HIGH if self.CALIBRATED_P_HIGH is not None else self.PROVISIONAL_P_HIGH
+
+    @property
+    def active_p_low(self) -> float:
+        """Returns calibrated P_low if set, otherwise provisional P_low."""
+        return self.CALIBRATED_P_LOW if self.CALIBRATED_P_LOW is not None else self.PROVISIONAL_P_LOW
+
 
 config = Config()
 
