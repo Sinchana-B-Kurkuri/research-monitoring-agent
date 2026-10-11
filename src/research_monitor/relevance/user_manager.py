@@ -84,6 +84,10 @@ def create_user(
 
     now = datetime.now(timezone.utc)
 
+    import secrets
+    if not access_token:
+        access_token = secrets.token_urlsafe(24)
+
     # 4. Create User entity
     user = User(
         id=str(user_id),

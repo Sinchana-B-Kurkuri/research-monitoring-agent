@@ -3,21 +3,24 @@ from sqlalchemy.orm import sessionmaker
 import logging
 
 from research_monitor.config import DATABASE_URL
-from research_monitor.database.models import Base
+from research_monitor.database.models import Base, create_training_labels_view
 
 logger = logging.getLogger(__name__)
 
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-def init_db():
-    """Initializes the database schema and pgvector extension."""
+def init_db(target_engine=None):
+    """Initializes the database schema, pgvector extension, and SQL views."""
+    eng = target_engine or engine
     try:
-        with engine.begin() as conn:
-            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
-            logger.info("Ensured pgvector extension is enabled.")
-        Base.metadata.create_all(bind=engine)
-        logger.info("Database schema initialized.")
+        if eng.dialect.name == "postgresql":
+            with eng.begin() as conn:
+                conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
+                logger.info("Ensured pgvector extension is enabled.")
+        Base.metadata.create_all(bind=eng)
+        create_training_labels_view(eng)
+        logger.info("Database schema and views initialized.")
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}")
         raise

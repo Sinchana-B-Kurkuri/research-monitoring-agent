@@ -223,9 +223,192 @@ class RoutingDecision(Base):
     paper = relationship("Paper")
     cycle = relationship("Cycle", back_populates="routing_decisions")
     vector_version = relationship("InterestVectorVersion")
+    review_tasks = relationship("ReviewTask", back_populates="routing_decision", cascade="all, delete-orphan")
+    digest_items = relationship("DigestItem", back_populates="routing_decision", cascade="all, delete-orphan")
+    feedback_events = relationship("FeedbackEvent", back_populates="routing_decision", cascade="all, delete-orphan")
 
     def __repr__(self):
         return (
             f"<RoutingDecision(user_id='{self.user_id}', paper_id='{self.paper_id}', "
             f"route='{self.route}', status='{self.status}', score={self.cosine_score:.4f})>"
         )
+
+
+class ReviewTask(Base):
+    """
+    Human review queue item for borderline or audit papers (Roadmap Section 6 & 7.6).
+    """
+    __tablename__ = 'review_tasks'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    decision_id = Column(Integer, ForeignKey('routing_decisions.id'), nullable=False, index=True)
+    kind = Column(String, default="borderline", nullable=False)  # 'borderline' or 'audit'
+    queued_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    shown_at = Column(DateTime(timezone=True), nullable=True)
+    decision = Column(String, nullable=True)  # 'accept', 'reject', 'skip', 'expired'
+    decided_at = Column(DateTime(timezone=True), nullable=True)
+    expired_at = Column(DateTime(timezone=True), nullable=True)
+
+    routing_decision = relationship("RoutingDecision", back_populates="review_tasks")
+
+    def __repr__(self):
+        return f"<ReviewTask(id={self.id}, decision_id={self.decision_id}, kind='{self.kind}', decision='{self.decision}')>"
+
+
+class Digest(Base):
+    """
+    Delivery digest for a user per cycle (Roadmap Section 6 & 7.6).
+    """
+    __tablename__ = 'digests'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String, ForeignKey('users.id'), nullable=False, index=True)
+    cycle_id = Column(Integer, ForeignKey('cycles.id'), nullable=False, index=True)
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        UniqueConstraint('user_id', 'cycle_id', name='uq_user_cycle_digest'),
+    )
+
+    user = relationship("User")
+    cycle = relationship("Cycle")
+    items = relationship(
+        "DigestItem",
+        back_populates="digest",
+        cascade="all, delete-orphan",
+        order_by="DigestItem.position",
+    )
+
+    def __repr__(self):
+        return f"<Digest(id={self.id}, user_id='{self.user_id}', cycle_id={self.cycle_id})>"
+
+
+class DigestItem(Base):
+    """
+    Individual delivered paper within a digest (Roadmap Section 6 & 7.6).
+    """
+    __tablename__ = 'digest_items'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    digest_id = Column(Integer, ForeignKey('digests.id'), nullable=False, index=True)
+    decision_id = Column(Integer, ForeignKey('routing_decisions.id'), nullable=False, index=True)
+    position = Column(Integer, nullable=False)  # 1-based ordering
+    via = Column(String, nullable=False)        # 'auto' or 'review'
+    shown_at = Column(DateTime(timezone=True), nullable=True)
+
+    digest = relationship("Digest", back_populates="items")
+    routing_decision = relationship("RoutingDecision", back_populates="digest_items")
+
+    def __repr__(self):
+        return f"<DigestItem(id={self.id}, digest_id={self.digest_id}, decision_id={self.decision_id}, position={self.position}, via='{self.via}')>"
+
+
+class FeedbackEvent(Base):
+    """
+    User and reviewer feedback signals (append-only) (Roadmap Section 6 & 7.3).
+    """
+    __tablename__ = 'feedback_events'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String, ForeignKey('users.id'), nullable=False, index=True)
+    paper_id = Column(String, ForeignKey('papers.id'), nullable=False, index=True)
+    decision_id = Column(Integer, ForeignKey('routing_decisions.id'), nullable=True, index=True)
+    source = Column(String, nullable=False)   # 'user' or 'reviewer'
+    label = Column(Integer, nullable=False)    # 1 or 0
+    is_audit = Column(Boolean, default=False, nullable=False)
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    user = relationship("User")
+    paper = relationship("Paper")
+    routing_decision = relationship("RoutingDecision", back_populates="feedback_events")
+
+    def __repr__(self):
+        return f"<FeedbackEvent(id={self.id}, user_id='{self.user_id}', paper_id='{self.paper_id}', source='{self.source}', label={self.label})>"
+
+
+class TrainingLabel(Base):
+    """
+    ORM representation of the training_labels database view (Roadmap Section 6 & 7.3).
+    Provides one effective label per (user_id, paper_id) where latest user like/dislike
+    takes precedence over reviewer decisions.
+    """
+    __tablename__ = 'training_labels'
+
+    event_id = Column(Integer, primary_key=True)
+    user_id = Column(String, primary_key=True)
+    paper_id = Column(String, primary_key=True)
+    label = Column(Integer, nullable=False)
+    origin = Column(String, nullable=False)
+
+    def __repr__(self):
+        return (
+            f"<TrainingLabel(user_id='{self.user_id}', paper_id='{self.paper_id}', "
+            f"label={self.label}, origin='{self.origin}', event_id={self.event_id})>"
+        )
+
+
+def create_training_labels_view(bind_or_engine) -> None:
+    """
+    Creates or replaces the training_labels database view in PostgreSQL or SQLite.
+    Rule (Section 7.3): Most recent user like/dislike takes precedence over reviewer decision.
+    Skips and expired tasks create no feedback events and thus produce no labels.
+    """
+    from sqlalchemy import text
+    dialect_name = getattr(bind_or_engine, "dialect", None)
+    dialect_str = dialect_name.name if dialect_name else "postgresql"
+
+    view_sql = """
+    WITH ranked_events AS (
+        SELECT
+            fe.id AS event_id,
+            fe.user_id,
+            fe.paper_id,
+            fe.label,
+            fe.source AS origin,
+            fe.created_at,
+            ROW_NUMBER() OVER (
+                PARTITION BY fe.user_id, fe.paper_id
+                ORDER BY
+                    CASE WHEN fe.source = 'user' THEN 1 ELSE 2 END,
+                    fe.created_at DESC,
+                    fe.id DESC
+            ) AS rank
+        FROM feedback_events fe
+    )
+    SELECT
+        event_id,
+        user_id,
+        paper_id,
+        label,
+        origin
+    FROM ranked_events
+    WHERE rank = 1;
+    """
+
+    if hasattr(bind_or_engine, "begin"):
+        cm = bind_or_engine.begin()
+    else:
+        # already a connection or session
+        from contextlib import nullcontext
+        cm = nullcontext(bind_or_engine)
+
+    with cm as conn:
+        if dialect_str == "postgresql":
+            conn.execute(text("DROP VIEW IF EXISTS training_labels CASCADE;"))
+            conn.execute(text(f"CREATE OR REPLACE VIEW training_labels AS {view_sql}"))
+        else:
+            conn.execute(text("DROP TABLE IF EXISTS training_labels;"))
+            conn.execute(text("DROP VIEW IF EXISTS training_labels;"))
+            conn.execute(text(f"CREATE VIEW training_labels AS {view_sql}"))

@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+
+{% block title %}Review Queue &bull; Research Monitor{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1 class="page-title">Human Review Queue</h1>
+        <p class="page-subtitle">Borderline candidate papers awaiting human relevance triage (capped at 15 per cycle)</p>
+    </div>
+    {% if cycle_id %}
+    <form hx-post="/cycle/{{ cycle_id }}/resume?token={{ token }}" hx-target="#resume-status" hx-swap="innerHTML">
+        <button type="submit" class="btn btn-primary">
+            Finalize & Build Digest &rarr;
+        </button>
+    </form>
+    {% endif %}
+</div>
+
+<div id="resume-status" style="margin-bottom: 1.5rem;"></div>
+
+<div id="review-queue-list">
+    {% if tasks %}
+        {% for task in tasks %}
+            {% include "_review_card.html" %}
+        {% endfor %}
+    {% else %}
+        <div class="empty-state">
+            <h3>No pending review tasks</h3>
+            <p>All borderline papers have been triaged or no tasks were queued for this user.</p>
+        </div>
+    {% endif %}
+</div>
+{% endblock %}

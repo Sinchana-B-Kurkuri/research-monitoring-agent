@@ -1,0 +1,57 @@
+<div class="card" id="task-card-{{ task.id }}">
+    <div class="card-header">
+        <h3 class="card-title">
+            <a href="https://arxiv.org/abs/{{ task.routing_decision.paper_id }}" target="_blank" rel="noopener">
+                {{ task.routing_decision.paper.title }}
+            </a>
+        </h3>
+        <div class="badges">
+            <span class="badge badge-score">Score: {{ "%.4f"|format(task.routing_decision.cosine_score) }}</span>
+            <span class="badge badge-review">Borderline</span>
+        </div>
+    </div>
+    <div class="card-meta">
+        arXiv: {{ task.routing_decision.paper_id }} &bull; Submitted: {{ task.routing_decision.paper.submitted_date }} &bull; Categories: {{ task.routing_decision.paper.categories|join(', ') if task.routing_decision.paper.categories is iterable and task.routing_decision.paper.categories is not string else task.routing_decision.paper.categories }}
+    </div>
+    <div class="card-abstract">
+        {{ task.routing_decision.paper.abstract }}
+    </div>
+    <div class="reason-box">
+        <strong>Routing Reason:</strong> {{ task.routing_decision.reason }}
+    </div>
+
+    {% if task.decision == 'accept' %}
+    <div style="color: var(--accent-green); font-weight: 600; padding: 0.5rem 0;">
+        &#10004; Accepted &bull; Transitioned to SUMMARIZE_PENDING
+    </div>
+    {% elif task.decision == 'reject' %}
+    <div style="color: var(--accent-red); font-weight: 600; padding: 0.5rem 0;">
+        &#10008; Rejected &bull; Excluded from Digest
+    </div>
+    {% elif task.decision == 'skip' %}
+    <div style="color: var(--text-muted); font-weight: 600; padding: 0.5rem 0;">
+        &#8212; Skipped &bull; Remains Pending Review
+    </div>
+    {% else %}
+    <div class="btn-group">
+        <button class="btn btn-accept" 
+                hx-post="/review/{{ task.id }}/action?action=accept&token={{ token }}" 
+                hx-target="#task-card-{{ task.id }}" 
+                hx-swap="outerHTML">
+            &#10004; Accept
+        </button>
+        <button class="btn btn-reject" 
+                hx-post="/review/{{ task.id }}/action?action=reject&token={{ token }}" 
+                hx-target="#task-card-{{ task.id }}" 
+                hx-swap="outerHTML">
+            &#10008; Reject
+        </button>
+        <button class="btn btn-skip" 
+                hx-post="/review/{{ task.id }}/action?action=skip&token={{ token }}" 
+                hx-target="#task-card-{{ task.id }}" 
+                hx-swap="outerHTML">
+            Skip
+        </button>
+    </div>
+    {% endif %}
+</div>

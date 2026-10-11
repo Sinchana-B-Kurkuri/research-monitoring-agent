@@ -7,6 +7,12 @@ from .models import (
     InterestVectorVersion,
     Cycle,
     RoutingDecision,
+    ReviewTask,
+    Digest,
+    DigestItem,
+    FeedbackEvent,
+    TrainingLabel,
+    create_training_labels_view,
 )
 from .session import get_session, init_db
 
@@ -19,6 +25,12 @@ __all__ = [
     "InterestVectorVersion",
     "Cycle",
     "RoutingDecision",
+    "ReviewTask",
+    "Digest",
+    "DigestItem",
+    "FeedbackEvent",
+    "TrainingLabel",
+    "create_training_labels_view",
     "get_session",
     "init_db",
 ]

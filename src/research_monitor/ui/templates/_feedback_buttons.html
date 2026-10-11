@@ -1,0 +1,19 @@
+<div class="btn-group" id="feedback-group-{{ item.id }}">
+    <button class="btn btn-feedback {% if user_reaction == 1 %}active-like{% endif %}"
+            hx-post="/digest/{{ item.id }}/feedback?reaction=like&token={{ token }}"
+            hx-target="#feedback-group-{{ item.id }}"
+            hx-swap="outerHTML">
+        &#128077; Like
+    </button>
+    <button class="btn btn-feedback {% if user_reaction == 0 %}active-dislike{% endif %}"
+            hx-post="/digest/{{ item.id }}/feedback?reaction=dislike&token={{ token }}"
+            hx-target="#feedback-group-{{ item.id }}"
+            hx-swap="outerHTML">
+        &#128078; Dislike
+    </button>
+    {% if user_reaction is not none %}
+    <span style="font-size: 0.8rem; color: var(--text-muted); margin-left: 0.5rem;">
+        Recorded as {% if user_reaction == 1 %}positive{% else %}negative{% endif %} signal
+    </span>
+    {% endif %}
+</div>

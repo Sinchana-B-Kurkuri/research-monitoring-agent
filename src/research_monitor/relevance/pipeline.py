@@ -372,6 +372,7 @@ def run_monitoring_cycle(
     as_of_date: Optional[str] = None,
     limit: Optional[int] = None,
     papers_override: Optional[list[dict]] = None,
+    auto_build_queue: bool = True,
 ) -> PipelineState:
     """
     Execute an autonomous monitoring cycle for a user through the explicit state machine:
@@ -453,5 +454,13 @@ def run_monitoring_cycle(
 
     # 5. Persist auditable decisions and finish cycle
     persist_decisions(state=state, session=session)
+
+    # 6. Queue borderline papers for human review (Phase 6)
+    if auto_build_queue:
+        try:
+            from research_monitor.review.queue import build_review_queue
+            build_review_queue(user_id=user.id, cycle_id=cycle.id, session=session)
+        except Exception as e:
+            logger.warning("Could not build review queue for cycle %d: %s", cycle.id, e)
 
     return state

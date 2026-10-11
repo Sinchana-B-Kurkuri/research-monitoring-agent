@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+
+{% block title %}Audit (Discarded Papers) &bull; Research Monitor{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1 class="page-title">Low-Relevance Audit Log</h1>
+        <p class="page-subtitle">Transparent record of discarded candidate papers filtered out below relevance floor</p>
+    </div>
+</div>
+
+{% if decisions %}
+    {% for dec in decisions %}
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">
+                <a href="https://arxiv.org/abs/{{ dec.paper_id }}" target="_blank" rel="noopener">
+                    {{ dec.paper.title }}
+                </a>
+            </h3>
+            <div class="badges">
+                <span class="badge badge-score">Score: {{ "%.4f"|format(dec.cosine_score) }}</span>
+                <span class="badge badge-low">LOW (DISCARDED)</span>
+            </div>
+        </div>
+        <div class="card-meta">
+            arXiv: {{ dec.paper_id }} &bull; Submitted: {{ dec.paper.submitted_date }} &bull; Categories: {{ dec.paper.categories|join(', ') if dec.paper.categories is iterable and dec.paper.categories is not string else dec.paper.categories }}
+        </div>
+        <div class="card-abstract">
+            {{ dec.paper.abstract }}
+        </div>
+        <div class="reason-box">
+            <strong>Relevance Audit Reason:</strong> {{ dec.reason }}
+        </div>
+    </div>
+    {% endfor %}
+{% else %}
+    <div class="empty-state">
+        <h3>No discarded papers recorded</h3>
+        <p>No low-relevance papers have been logged for this user.</p>
+    </div>
+{% endif %}
+{% endblock %}

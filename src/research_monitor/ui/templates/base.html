@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Research Monitor{% endblock %}</title>
+    <!-- HTMX -->
+    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+    <style>
+        :root {
+            --bg: #0f172a;
+            --surface: #1e293b;
+            --surface-hover: #334155;
+            --border: #334155;
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --primary: #38bdf8;
+            --primary-hover: #0284c7;
+            --accent-green: #10b981;
+            --accent-green-bg: #064e3b;
+            --accent-red: #ef4444;
+            --accent-red-bg: #7f1d1d;
+            --accent-amber: #f59e0b;
+            --accent-amber-bg: #78350f;
+            --font: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: var(--bg);
+            color: var(--text-primary);
+            font-family: var(--font);
+            line-height: 1.6;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        header {
+            background-color: var(--surface);
+            border-bottom: 1px solid var(--border);
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .logo-group {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .logo-title {
+            font-size: 1.25rem;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+            color: var(--primary);
+        }
+
+        .user-tag {
+            font-size: 0.8rem;
+            background: #0f172a;
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+            padding: 0.25rem 0.6rem;
+            border-radius: 9999px;
+        }
+
+        nav {
+            display: flex;
+            gap: 1rem;
+        }
+
+        nav a {
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-size: 0.95rem;
+            font-weight: 500;
+            padding: 0.5rem 0.85rem;
+            border-radius: 6px;
+            transition: all 0.15s ease;
+        }
+
+        nav a:hover, nav a.active {
+            color: var(--text-primary);
+            background-color: var(--surface-hover);
+        }
+
+        main {
+            flex: 1;
+            max-width: 1000px;
+            width: 100%;
+            margin: 2rem auto;
+            padding: 0 1.5rem;
+        }
+
+        .page-header {
+            margin-bottom: 2rem;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 1rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+        }
+
+        .page-title {
+            font-size: 1.75rem;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+
+        .page-subtitle {
+            color: var(--text-secondary);
+            font-size: 0.95rem;
+            margin-top: 0.25rem;
+        }
+
+        .card {
+            background-color: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin-bottom: 1.25rem;
+            transition: border-color 0.15s ease, box-shadow 0.15s ease;
+        }
+
+        .card:hover {
+            border-color: #475569;
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 1rem;
+            margin-bottom: 0.75rem;
+        }
+
+        .card-title {
+            font-size: 1.15rem;
+            font-weight: 600;
+            line-height: 1.4;
+            color: var(--text-primary);
+        }
+
+        .card-title a {
+            color: var(--text-primary);
+            text-decoration: none;
+        }
+
+        .card-title a:hover {
+            color: var(--primary);
+            text-decoration: underline;
+        }
+
+        .badges {
+            display: flex;
+            gap: 0.5rem;
+            flex-shrink: 0;
+        }
+
+        .badge {
+            font-size: 0.75rem;
+            font-weight: 600;
+            padding: 0.2rem 0.55rem;
+            border-radius: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .badge-score {
+            background: #1e1b4b;
+            color: #a5b4fc;
+            border: 1px solid #3730a3;
+        }
+
+        .badge-auto {
+            background: var(--accent-green-bg);
+            color: var(--accent-green);
+            border: 1px solid #047857;
+        }
+
+        .badge-review {
+            background: var(--accent-amber-bg);
+            color: var(--accent-amber);
+            border: 1px solid #b45309;
+        }
+
+        .badge-low {
+            background: var(--accent-red-bg);
+            color: var(--accent-red);
+            border: 1px solid #b91c1c;
+        }
+
+        .card-meta {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            margin-bottom: 0.85rem;
+        }
+
+        .card-abstract {
+            font-size: 0.95rem;
+            color: var(--text-secondary);
+            line-height: 1.55;
+            margin-bottom: 1.25rem;
+        }
+
+        .reason-box {
+            background-color: rgba(15, 23, 42, 0.6);
+            border: 1px solid var(--border);
+            border-left: 3px solid var(--primary);
+            padding: 0.65rem 0.85rem;
+            border-radius: 4px;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            margin-bottom: 1.25rem;
+        }
+
+        .btn-group {
+            display: flex;
+            gap: 0.75rem;
+            align-items: center;
+        }
+
+        .btn {
+            font-family: inherit;
+            font-size: 0.9rem;
+            font-weight: 600;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            cursor: pointer;
+            border: 1px solid transparent;
+            transition: all 0.15s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+
+        .btn-primary {
+            background-color: var(--primary);
+            color: #0f172a;
+        }
+        .btn-primary:hover {
+            background-color: var(--primary-hover);
+        }
+
+        .btn-accept {
+            background-color: var(--accent-green-bg);
+            color: var(--accent-green);
+            border-color: #059669;
+        }
+        .btn-accept:hover {
+            background-color: #059669;
+            color: #ffffff;
+        }
+
+        .btn-reject {
+            background-color: var(--accent-red-bg);
+            color: var(--accent-red);
+            border-color: #dc2626;
+        }
+        .btn-reject:hover {
+            background-color: #dc2626;
+            color: #ffffff;
+        }
+
+        .btn-skip {
+            background-color: transparent;
+            color: var(--text-secondary);
+            border-color: var(--border);
+        }
+        .btn-skip:hover {
+            background-color: var(--surface-hover);
+            color: var(--text-primary);
+        }
+
+        .btn-feedback {
+            background: transparent;
+            color: var(--text-secondary);
+            border: 1px solid var(--border);
+            padding: 0.4rem 0.8rem;
+            font-size: 0.85rem;
+        }
+        .btn-feedback:hover {
+            border-color: #64748b;
+            color: var(--text-primary);
+        }
+
+        .btn-feedback.active-like {
+            background: var(--accent-green-bg);
+            color: var(--accent-green);
+            border-color: var(--accent-green);
+        }
+
+        .btn-feedback.active-dislike {
+            background: var(--accent-red-bg);
+            color: var(--accent-red);
+            border-color: var(--accent-red);
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 4rem 2rem;
+            color: var(--text-muted);
+            border: 1px dashed var(--border);
+            border-radius: 8px;
+        }
+
+        .empty-state h3 {
+            font-size: 1.25rem;
+            color: var(--text-secondary);
+            margin-bottom: 0.5rem;
+        }
+
+        footer {
+            text-align: center;
+            padding: 1.5rem;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            border-top: 1px solid var(--border);
+            margin-top: auto;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="logo-group">
+            <span class="logo-title">🔬 Research Monitor</span>
+            {% if user %}
+            <span class="user-tag">{{ user.name }}</span>
+            {% endif %}
+        </div>
+        <nav>
+            <a href="/review?token={{ token }}" class="{% if active_tab == 'review' %}active{% endif %}">Review Queue</a>
+            <a href="/digest?token={{ token }}" class="{% if active_tab == 'digest' %}active{% endif %}">Digest</a>
+            <a href="/audit?token={{ token }}" class="{% if active_tab == 'audit' %}active{% endif %}">Audit (Low)</a>
+        </nav>
+    </header>
+
+    <main>
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer>
+        Relevance-Gated Agentic Workflow &bull; Phase 6 Human Review & Digest UI
+    </footer>
+</body>
+</html>

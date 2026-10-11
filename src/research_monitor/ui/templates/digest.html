@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+
+{% block title %}Research Digest &bull; Research Monitor{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1 class="page-title">Personalized Research Digest</h1>
+        <p class="page-subtitle">Curated relevant papers (HIGH auto-cleared + review-accepted, capped at 20)</p>
+    </div>
+    {% if digest %}
+    <div style="font-size: 0.85rem; color: var(--text-muted); text-align: right;">
+        Cycle #{{ digest.cycle_id }} &bull; Delivered: {{ digest.created_at.strftime('%Y-%m-%d %H:%M UTC') }}
+    </div>
+    {% endif %}
+</div>
+
+{% if digest and digest.items %}
+    {% for item in digest.items %}
+    <div class="card" id="digest-item-{{ item.id }}">
+        <div class="card-header">
+            <h3 class="card-title">
+                <a href="https://arxiv.org/abs/{{ item.routing_decision.paper_id }}" target="_blank" rel="noopener">
+                    {{ item.position }}. {{ item.routing_decision.paper.title }}
+                </a>
+            </h3>
+            <div class="badges">
+                <span class="badge badge-score">Score: {{ "%.4f"|format(item.routing_decision.cosine_score) }}</span>
+                {% if item.via == 'auto' %}
+                <span class="badge badge-auto">via: auto</span>
+                {% else %}
+                <span class="badge badge-review">via: review</span>
+                {% endif %}
+            </div>
+        </div>
+        <div class="card-meta">
+            arXiv: {{ item.routing_decision.paper_id }} &bull; Submitted: {{ item.routing_decision.paper.submitted_date }} &bull; Categories: {{ item.routing_decision.paper.categories|join(', ') if item.routing_decision.paper.categories is iterable and item.routing_decision.paper.categories is not string else item.routing_decision.paper.categories }}
+        </div>
+        <div class="card-abstract">
+            {{ item.routing_decision.paper.abstract }}
+        </div>
+
+        {% set user_reaction = reactions.get(item.id) %}
+        {% include "_feedback_buttons.html" %}
+    </div>
+    {% endfor %}
+{% else %}
+    <div class="empty-state">
+        <h3>No digest available</h3>
+        <p>No papers have been delivered in a digest yet. Triage borderline papers in the review queue and build a digest to deliver them.</p>
+    </div>
+{% endif %}
+{% endblock %}

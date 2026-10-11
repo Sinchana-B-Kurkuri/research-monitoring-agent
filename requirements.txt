@@ -12,3 +12,6 @@ tqdm
 types-tqdm
 scikit-learn
 scipy
+fastapi
+uvicorn
+jinja2
