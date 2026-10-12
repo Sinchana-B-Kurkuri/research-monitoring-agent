@@ -143,31 +143,28 @@ def discover_stage(
                     )
 
     elif state.mode == "live":
-        # Live mode: Fetch latest papers via arXiv client (Phase 2 stream-filter)
-        import arxiv
-        search = arxiv.Search(
-            query="cat:cs.CL OR cat:cs.LG OR cat:cs.AI",
-            max_results=limit or 50,
-            sort_by=arxiv.SortCriterion.SubmittedDate,
-        )
-        client = arxiv.Client()
-        for result in client.results(search):
-            raw_id = result.get_short_id()
-            clean_id = raw_id.split("v")[0] if "v" in raw_id else raw_id
-            if clean_id in already_routed_pids:
-                continue
+        # Live mode: Discover unrouted papers from the database
+        query = session.query(Paper)
+        if already_routed_pids:
+            query = query.filter(~Paper.id.in_(already_routed_pids))
+
+        query = query.order_by(Paper.submitted_date.desc(), Paper.id.desc())
+        if limit:
+            query = query.limit(limit)
+
+        db_papers = query.all()
+        for dp in db_papers:
             candidates.append(
                 PaperCandidate(
-                    paper_id=clean_id,
-                    title=result.title,
-                    abstract=result.summary,
-                    submitted_date=result.published.strftime("%Y-%m-%d"),
-                    categories=result.categories,
-                    is_reference=False,
+                    paper_id=dp.id,
+                    title=dp.title,
+                    abstract=dp.abstract,
+                    submitted_date=dp.submitted_date,
+                    categories=dp.categories,
+                    is_reference=dp.is_reference,
+                    embedding=np.array(dp.embedding, dtype=np.float32) if dp.embedding else None,
                 )
             )
-            if limit and len(candidates) >= limit:
-                break
 
     state.discovered = candidates
     state.counts["discovered"] = len(candidates)

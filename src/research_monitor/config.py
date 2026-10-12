@@ -65,6 +65,11 @@ class Config:
     LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.0"))
     SUMMARY_PROMPT_VERSION = os.getenv("SUMMARY_PROMPT_VERSION", "v1.0")
 
+    # Phase 8: Live arXiv Monitoring configuration
+    LIVE_MAX_RESULTS = int(os.getenv("LIVE_MAX_RESULTS", "50"))
+    LIVE_DAYS = int(os.getenv("LIVE_DAYS", "0"))
+    LIVE_SLEEP_SECONDS = float(os.getenv("LIVE_SLEEP_SECONDS", "3.0"))
+
     @property
     def active_p_high(self) -> float:
         """Returns calibrated P_high if set, otherwise provisional P_high."""
@@ -87,3 +92,6 @@ GEMINI_API_KEY = config.GEMINI_API_KEY
 LLM_MODEL = config.LLM_MODEL
 LLM_TEMPERATURE = config.LLM_TEMPERATURE
 SUMMARY_PROMPT_VERSION = config.SUMMARY_PROMPT_VERSION
+LIVE_MAX_RESULTS = config.LIVE_MAX_RESULTS
+LIVE_DAYS = config.LIVE_DAYS
+LIVE_SLEEP_SECONDS = config.LIVE_SLEEP_SECONDS

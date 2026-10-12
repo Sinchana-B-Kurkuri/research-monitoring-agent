@@ -37,7 +37,10 @@ def strip_version(raw_id: str) -> str:
         "cs/0612007v1"                         ->  "cs/0612007"
     """
     m = _ID_PATTERN.search(raw_id)
-    return m.group(1) if m else raw_id
+    if m:
+        return m.group(1)
+    clean = raw_id.split("/")[-1]
+    return re.sub(r"v\d+$", "", clean)
 
 
 def normalize_text(text: str) -> str:
