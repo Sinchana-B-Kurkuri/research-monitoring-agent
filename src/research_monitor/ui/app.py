@@ -17,7 +17,7 @@ from pathlib import Path
 import logging
 from typing import Generator, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -38,6 +38,7 @@ from research_monitor.review.digest import (
     resume_after_review,
 )
 from research_monitor.review.queue import record_review_action
+from research_monitor.summary.service import summarize_decision_background
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +148,7 @@ def _render_review_page(request: Request, user: User, token: str, session: Sessi
 def handle_review_action(
     task_id: int,
     request: Request,
+    background_tasks: BackgroundTasks,
     action: str = Query(...),
     token: Optional[str] = Query(None),
     auth: tuple[User, str] = Depends(authenticate_user),
@@ -163,6 +165,12 @@ def handle_review_action(
             user_id=user.id,
             session=session,
         )
+        if action.lower().strip() == "accept":
+            background_tasks.add_task(
+                summarize_decision_background,
+                decision_id=updated_task.decision_id,
+                user_id=user.id,
+            )
     except PermissionError as pe:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(pe))
     except ValueError as ve:

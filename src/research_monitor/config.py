@@ -59,6 +59,12 @@ class Config:
     # Access logging
     TEST_ACCESS_LOG_PATH = os.getenv("TEST_ACCESS_LOG_PATH", "experiments/results/test_access.log")
 
+    # Phase 7: Gated LLM Summarization configuration
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+    LLM_MODEL = os.getenv("LLM_MODEL", "gemini-2.5-flash")
+    LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.0"))
+    SUMMARY_PROMPT_VERSION = os.getenv("SUMMARY_PROMPT_VERSION", "v1.0")
+
     @property
     def active_p_high(self) -> float:
         """Returns calibrated P_high if set, otherwise provisional P_high."""
@@ -76,3 +82,8 @@ DATABASE_URL = os.getenv(
     "DATABASE_URL", 
     "postgresql+psycopg2://postgres:postgres@localhost:5432/research_monitor"
 )
+
+GEMINI_API_KEY = config.GEMINI_API_KEY
+LLM_MODEL = config.LLM_MODEL
+LLM_TEMPERATURE = config.LLM_TEMPERATURE
+SUMMARY_PROMPT_VERSION = config.SUMMARY_PROMPT_VERSION

@@ -98,6 +98,7 @@ class User(Base):
     vector_versions = relationship("InterestVectorVersion", back_populates="user", cascade="all, delete-orphan")
     cycles = relationship("Cycle", back_populates="user", cascade="all, delete-orphan")
     routing_decisions = relationship("RoutingDecision", back_populates="user", cascade="all, delete-orphan")
+    summaries = relationship("Summary", back_populates="user", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<User(id='{self.id}', name='{self.name}', is_simulated={self.is_simulated})>"
@@ -226,11 +227,49 @@ class RoutingDecision(Base):
     review_tasks = relationship("ReviewTask", back_populates="routing_decision", cascade="all, delete-orphan")
     digest_items = relationship("DigestItem", back_populates="routing_decision", cascade="all, delete-orphan")
     feedback_events = relationship("FeedbackEvent", back_populates="routing_decision", cascade="all, delete-orphan")
+    summary = relationship("Summary", uselist=False, back_populates="routing_decision", cascade="all, delete-orphan")
 
     def __repr__(self):
         return (
             f"<RoutingDecision(user_id='{self.user_id}', paper_id='{self.paper_id}', "
             f"route='{self.route}', status='{self.status}', score={self.cosine_score:.4f})>"
+        )
+
+
+class Summary(Base):
+    """
+    LLM outputs: interest-framed paper summaries (Roadmap Section 6 & Phase 7).
+    """
+    __tablename__ = 'summaries'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    decision_id = Column(Integer, ForeignKey('routing_decisions.id'), nullable=False, index=True)
+    paper_id = Column(String, ForeignKey('papers.id'), nullable=False, index=True)
+    user_id = Column(String, ForeignKey('users.id'), nullable=False, index=True)
+    text = Column(Text, nullable=False)
+    llm_model = Column(String, nullable=False)
+    prompt_version = Column(String, nullable=False)
+    tokens_in = Column(Integer, nullable=True)
+    tokens_out = Column(Integer, nullable=True)
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        UniqueConstraint('decision_id', name='uq_summary_decision'),
+        UniqueConstraint('user_id', 'paper_id', 'llm_model', 'prompt_version', name='uq_summary_cache'),
+    )
+
+    routing_decision = relationship("RoutingDecision", back_populates="summary")
+    paper = relationship("Paper")
+    user = relationship("User", back_populates="summaries")
+
+    def __repr__(self):
+        return (
+            f"<Summary(id={self.id}, user_id='{self.user_id}', paper_id='{self.paper_id}', "
+            f"model='{self.llm_model}', prompt='{self.prompt_version}')>"
         )
 
 

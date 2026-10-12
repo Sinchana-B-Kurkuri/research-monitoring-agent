@@ -26,6 +26,8 @@ from research_monitor.database.models import (
 )
 from research_monitor.relevance.state import DecisionStatus
 from research_monitor.review.queue import expire_stale_tasks
+from research_monitor.summary.service import summarize_decision
+from research_monitor.summary.summarizer import BaseSummarizer
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +40,7 @@ def resume_after_review(
     session: Session,
     max_digest_items: int = MAX_DIGEST_ITEMS_PER_CYCLE,
     now: Optional[datetime] = None,
+    summarizer: Optional[BaseSummarizer] = None,
 ) -> tuple[Digest, bool]:
     """
     Idempotent operation to build and finalize the delivery digest for a monitoring cycle.
@@ -47,8 +50,9 @@ def resume_after_review(
     3. Collects HIGH papers (via = auto) and review-accepted borderline papers (via = review).
     4. Orders candidate papers by cosine_score DESC.
     5. Delivers up to max_digest_items (default: 20) with status DELIVERED.
-    6. Logs overflow candidates as DEFERRED_OVERFLOW.
-    7. Returns tuple of (Digest, already_existed_boolean).
+    6. Summarizes delivered papers if not already summarized (Phase 7).
+    7. Logs overflow candidates as DEFERRED_OVERFLOW (never summarized).
+    8. Returns tuple of (Digest, already_existed_boolean).
     """
     current_time = now or datetime.now(timezone.utc)
 
@@ -75,6 +79,7 @@ def resume_after_review(
             RoutingDecision.status.in_([
                 DecisionStatus.ROUTED_HIGH.value,
                 DecisionStatus.SUMMARIZE_PENDING.value,
+                DecisionStatus.SUMMARIZED.value,
             ]),
         )
         .all()
@@ -88,7 +93,10 @@ def resume_after_review(
             RoutingDecision.user_id == user_id,
             RoutingDecision.cycle_id == cycle_id,
             RoutingDecision.route == "BORDERLINE",
-            RoutingDecision.status == DecisionStatus.SUMMARIZE_PENDING.value,
+            RoutingDecision.status.in_([
+                DecisionStatus.SUMMARIZE_PENDING.value,
+                DecisionStatus.SUMMARIZED.value,
+            ]),
             ReviewTask.decision == "accept",
             ReviewTask.kind != "audit",  # Audit papers never enter digest
         )
@@ -119,6 +127,22 @@ def resume_after_review(
     overflow = candidates[max_digest_items:]
 
     for position, (dec, via) in enumerate(delivered, start=1):
+        # Phase 7: Summarize paper if not already summarized
+        if dec.summary is None:
+            try:
+                summarize_decision(
+                    decision_id=dec.id,
+                    user_id=user_id,
+                    session=session,
+                    summarizer=summarizer,
+                )
+            except Exception as e:
+                logger.warning(
+                    "Summarization attempt failed for decision %d in digest: %s. Preserving fallback.",
+                    dec.id,
+                    e,
+                )
+
         item = DigestItem(
             digest_id=digest.id,
             decision_id=dec.id,
@@ -129,7 +153,7 @@ def resume_after_review(
         dec.status = DecisionStatus.DELIVERED.value
         session.add(item)
 
-    # 8. Mark overflow beyond digest cap as DEFERRED_OVERFLOW
+    # 8. Mark overflow beyond digest cap as DEFERRED_OVERFLOW (strictly never summarized)
     for dec, _ in overflow:
         dec.status = DecisionStatus.DEFERRED_OVERFLOW.value
         dec.reason = (

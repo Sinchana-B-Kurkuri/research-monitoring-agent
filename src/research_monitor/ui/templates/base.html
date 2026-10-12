@@ -215,6 +215,85 @@
             margin-bottom: 1.25rem;
         }
 
+        .card-summary {
+            background-color: rgba(30, 58, 138, 0.15);
+            border: 1px solid rgba(59, 130, 246, 0.35);
+            border-left: 3px solid var(--primary);
+            padding: 0.85rem 1rem;
+            border-radius: 6px;
+            margin-bottom: 1rem;
+        }
+
+        .summary-badge-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 0.5rem;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+
+        .badge-summary {
+            background: #1e3a8a;
+            color: #93c5fd;
+            border: 1px solid #2563eb;
+        }
+
+        .badge-pending {
+            background: var(--surface-hover);
+            color: var(--text-muted);
+            border: 1px solid var(--border);
+        }
+
+        .summary-meta-note {
+            font-size: 0.78rem;
+            color: var(--text-muted);
+        }
+
+        .summary-text {
+            font-size: 0.95rem;
+            color: var(--text-primary);
+            line-height: 1.6;
+        }
+
+        .abstract-accordion {
+            font-size: 0.85rem;
+            margin-bottom: 1.25rem;
+        }
+
+        .abstract-toggle {
+            cursor: pointer;
+            user-select: none;
+            color: var(--text-muted);
+            font-weight: 500;
+            padding: 0.2rem 0;
+        }
+
+        .abstract-toggle:hover {
+            color: var(--text-secondary);
+        }
+
+        .card-abstract-collapsed {
+            font-size: 0.88rem;
+            color: var(--text-muted);
+            line-height: 1.5;
+            margin-top: 0.5rem;
+            padding-left: 0.75rem;
+            border-left: 2px solid var(--border);
+        }
+
+        .summary-fallback-bar {
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            margin-bottom: 0.65rem;
+        }
+
+        .fallback-note {
+            font-size: 0.82rem;
+            color: var(--text-muted);
+        }
+
         .reason-box {
             background-color: rgba(15, 23, 42, 0.6);
             border: 1px solid var(--border);

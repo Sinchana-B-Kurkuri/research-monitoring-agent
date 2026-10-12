@@ -36,9 +36,32 @@
         <div class="card-meta">
             arXiv: {{ item.routing_decision.paper_id }} &bull; Submitted: {{ item.routing_decision.paper.submitted_date }} &bull; Categories: {{ item.routing_decision.paper.categories|join(', ') if item.routing_decision.paper.categories is iterable and item.routing_decision.paper.categories is not string else item.routing_decision.paper.categories }}
         </div>
+
+        {% if item.routing_decision.summary %}
+        <div class="card-summary">
+            <div class="summary-badge-bar">
+                <span class="badge badge-summary">AI Summary &bull; Framed for Your Interests</span>
+                <span class="summary-meta-note">Model: {{ item.routing_decision.summary.llm_model }} &bull; Prompt: {{ item.routing_decision.summary.prompt_version }}</span>
+            </div>
+            <div class="summary-text">
+                {{ item.routing_decision.summary.text }}
+            </div>
+        </div>
+        <details class="abstract-accordion">
+            <summary class="abstract-toggle">Show original paper abstract</summary>
+            <div class="card-abstract card-abstract-collapsed">
+                {{ item.routing_decision.paper.abstract }}
+            </div>
+        </details>
+        {% else %}
+        <div class="summary-fallback-bar">
+            <span class="badge badge-pending">Summary Pending</span>
+            <span class="fallback-note">Displaying original author abstract:</span>
+        </div>
         <div class="card-abstract">
             {{ item.routing_decision.paper.abstract }}
         </div>
+        {% endif %}
 
         {% set user_reaction = reactions.get(item.id) %}
         {% include "_feedback_buttons.html" %}
