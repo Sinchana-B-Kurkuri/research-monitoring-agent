@@ -74,10 +74,11 @@ def main() -> None:
         v0 = user.vector_versions[0] if user.vector_versions else None
 
         print("\n" + "=" * 65)
-        print("  USER CREATED & INITIALIZED (PHASE 5 COLD START)")
+        print("  USER CREATED & INITIALIZED (PHASE 5 / PHASE 9 COLD START)")
         print("=" * 65)
         print(f"  User ID:             {user.id}")
         print(f"  Name:                {user.name}")
+        print(f"  Access Token:        {user.access_token}")
         print(f"  Simulated User:      {user.is_simulated}")
         print(f"  Created At (UTC):    {user.created_at}")
         if v0:
@@ -87,6 +88,13 @@ def main() -> None:
             print(f"  P_low Level:         {v0.p_low_level:.1f}th percentile")
             print(f"  Score Threshold t_h: {v0.t_high:.4f}")
             print(f"  Score Threshold t_l: {v0.t_low:.4f}")
+        print("-" * 65)
+        print("  PILOT USER PORTAL URLS:")
+        print(f"  Review Queue:        http://localhost:8000/review?token={user.access_token}")
+        print(f"  Research Digest:     http://localhost:8000/digest?token={user.access_token}")
+        print(f"  Audit (Low papers):  http://localhost:8000/audit?token={user.access_token}")
+        print("-" * 65)
+        print(f"  Daily Run Command:   python scripts/run_daily_monitoring.py --user-id {user.id} --once")
         print("=" * 65 + "\n")
     finally:
         session.close()

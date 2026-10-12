@@ -420,9 +420,13 @@
             {% endif %}
         </div>
         <nav>
+            {% if token %}
             <a href="/review?token={{ token }}" class="{% if active_tab == 'review' %}active{% endif %}">Review Queue</a>
             <a href="/digest?token={{ token }}" class="{% if active_tab == 'digest' %}active{% endif %}">Digest</a>
             <a href="/audit?token={{ token }}" class="{% if active_tab == 'audit' %}active{% endif %}">Audit (Low)</a>
+            {% else %}
+            <a href="/onboard" class="{% if active_tab == 'onboard' %}active{% endif %}">Pilot Onboarding</a>
+            {% endif %}
         </nav>
     </header>
 

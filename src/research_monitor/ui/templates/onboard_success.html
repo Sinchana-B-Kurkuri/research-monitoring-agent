@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+
+{% block title %}Profile Initialized &bull; Research Monitor{% endblock %}
+
+{% block content %}
+<div style="max-width: 760px; margin: 2rem auto; padding: 0 1rem;">
+    <div style="background-color: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 2rem; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);">
+        
+        <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1rem;">
+            <div style="background: rgba(16, 185, 129, 0.15); border: 1px solid var(--accent-green); border-radius: 8px; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; font-size: 1.5rem;">
+                ✅
+            </div>
+            <div>
+                <h1 style="font-size: 1.5rem; font-weight: 700; color: var(--text-primary); margin: 0;">
+                    Pilot Profile Initialized
+                </h1>
+                <p style="font-size: 0.9rem; color: var(--accent-green); margin: 0; font-weight: 500;">
+                    Cold-Start Vector v0 & Relevance Thresholds Calibrated
+                </p>
+            </div>
+        </div>
+
+        <p style="font-size: 0.95rem; color: var(--text-secondary); line-height: 1.6; margin-bottom: 1.5rem;">
+            Welcome, <strong style="color: var(--text-primary);">{{ user.name }}</strong> (<code>{{ user.id }}</code>).
+            Your research interests have been embedded and connected to the relevance-gating state machine.
+            Save your personal access links below to access your review queue and research digests.
+        </p>
+
+        <div style="background: #0f172a; border: 1px solid var(--border); border-radius: 8px; padding: 1.25rem; margin-bottom: 1.5rem;">
+            <h3 style="font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--primary); margin-bottom: 0.75rem;">
+                Your Personalized Access Links
+            </h3>
+            
+            <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+                <div style="display: flex; justify-content: space-between; align-items: center; background: var(--surface); padding: 0.75rem 1rem; border-radius: 6px; border: 1px solid var(--border);">
+                    <div>
+                        <div style="font-size: 0.9rem; font-weight: 600; color: var(--text-primary);">📥 Review Queue</div>
+                        <div style="font-size: 0.8rem; color: var(--text-muted);">Inspect & decide borderline papers (Accept / Reject / Skip)</div>
+                    </div>
+                    <a href="/review?token={{ user.access_token }}" style="background: var(--primary); color: #0f172a; padding: 0.4rem 0.85rem; border-radius: 4px; text-decoration: none; font-size: 0.85rem; font-weight: 600;">
+                        Open Queue &rarr;
+                    </a>
+                </div>
+
+                <div style="display: flex; justify-content: space-between; align-items: center; background: var(--surface); padding: 0.75rem 1rem; border-radius: 6px; border: 1px solid var(--border);">
+                    <div>
+                        <div style="font-size: 0.9rem; font-weight: 600; color: var(--text-primary);">📰 Research Digest</div>
+                        <div style="font-size: 0.8rem; color: var(--text-muted);">Delivered high-confidence papers and LLM summaries</div>
+                    </div>
+                    <a href="/digest?token={{ user.access_token }}" style="background: var(--primary); color: #0f172a; padding: 0.4rem 0.85rem; border-radius: 4px; text-decoration: none; font-size: 0.85rem; font-weight: 600;">
+                        Open Digest &rarr;
+                    </a>
+                </div>
+
+                <div style="display: flex; justify-content: space-between; align-items: center; background: var(--surface); padding: 0.75rem 1rem; border-radius: 6px; border: 1px solid var(--border);">
+                    <div>
+                        <div style="font-size: 0.9rem; font-weight: 600; color: var(--text-primary);">🔍 Audit Log</div>
+                        <div style="font-size: 0.8rem; color: var(--text-muted);">Full transparency view of discarded low-relevance papers</div>
+                    </div>
+                    <a href="/audit?token={{ user.access_token }}" style="background: var(--surface-hover); color: var(--text-primary); border: 1px solid var(--border); padding: 0.4rem 0.85rem; border-radius: 4px; text-decoration: none; font-size: 0.85rem; font-weight: 600;">
+                        Open Audit &rarr;
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <div style="background: rgba(30, 41, 59, 0.5); border: 1px solid var(--border); border-radius: 8px; padding: 1.25rem;">
+            <h4 style="font-size: 0.9rem; font-weight: 600; color: var(--text-primary); margin-bottom: 0.5rem;">
+                Run Your First Daily Monitoring Cycle
+            </h4>
+            <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.75rem;">
+                Run this command in PowerShell or terminal to fetch the latest arXiv submissions for your interests:
+            </p>
+            <div style="background: #0f172a; border: 1px solid var(--border); padding: 0.75rem 1rem; border-radius: 6px; font-family: monospace; font-size: 0.9rem; color: var(--primary); overflow-x: auto;">
+                python scripts/run_daily_monitoring.py --user-id {{ user.id }} --once
+            </div>
+        </div>
+
+    </div>
+</div>
+{% endblock %}

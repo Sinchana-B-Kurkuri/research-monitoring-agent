@@ -15,11 +15,15 @@ Follows Roadmap Section 6, 7.3, 7.6, and 9.1:
 
 from pathlib import Path
 import logging
+import subprocess
+import sys
 from typing import Generator, Optional
+from urllib.parse import parse_qs
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, status
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from research_monitor.database.models import (
@@ -42,11 +46,13 @@ from research_monitor.summary.service import summarize_decision_background
 
 logger = logging.getLogger(__name__)
 
-# Template configuration
+# Template and script paths
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+CREATE_USER_SCRIPT = PROJECT_ROOT / "scripts" / "create_user.py"
 
-app = FastAPI(title="Research Monitor UI", version="0.6.0")
+app = FastAPI(title="Research Monitor UI", version="0.9.0")
 
 
 def get_db() -> Generator[Session, None, None]:
@@ -56,6 +62,197 @@ def get_db() -> Generator[Session, None, None]:
         yield db
     finally:
         db.close()
+
+
+# =========================================================================
+# Production Health Check & Root Portal
+# =========================================================================
+
+@app.get("/health")
+def health_check(session: Session = Depends(get_db)):
+    """
+    Production health check endpoint verifying application and database connectivity.
+    Returns 200 OK with connectivity telemetry; 503 SERVICE UNAVAILABLE on failure.
+    """
+    try:
+        session.execute(text("SELECT 1"))
+        return {
+            "status": "ok",
+            "database": "connected",
+            "version": "0.9.0",
+        }
+    except Exception as exc:
+        logger.error("Health check database probe failed: %s", type(exc).__name__)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "status": "degraded",
+                "database": "disconnected",
+                "error": "Database connectivity check failed",
+            },
+        )
+
+
+@app.get("/", response_class=HTMLResponse)
+def root_page(
+    request: Request,
+    token: Optional[str] = Query(None),
+    session: Session = Depends(get_db),
+):
+    """
+    Root portal landing:
+    - If valid user token provided in query, redirect to their digest.
+    - Otherwise, redirect to cold-start pilot onboarding.
+    """
+    if token and token.strip():
+        user = session.query(User).filter_by(access_token=token.strip()).first()
+        if user:
+            return RedirectResponse(
+                url=f"/digest?token={token.strip()}",
+                status_code=status.HTTP_302_FOUND,
+            )
+    return RedirectResponse(url="/onboard", status_code=status.HTTP_302_FOUND)
+
+
+# =========================================================================
+# Cold-Start Pilot Onboarding Routes
+# =========================================================================
+
+@app.get("/onboard", response_class=HTMLResponse)
+def onboard_page(request: Request):
+    """Render cold-start pilot researcher onboarding form."""
+    return templates.TemplateResponse(
+        request=request,
+        name="onboard.html",
+        context={
+            "active_tab": "onboard",
+            "token": None,
+            "user": None,
+        },
+    )
+
+
+@app.post("/onboard")
+async def handle_onboard_user(
+    request: Request,
+    session: Session = Depends(get_db),
+):
+    """
+    Onboard a new pilot user:
+    - Parses user_id, name, and seed_text without requiring python-multipart.
+    - Executes scripts/create_user.py in an isolated subprocess to keep the web
+      service completely free of PyTorch / sentence_transformers.
+    - Returns personalized token and links to their review queue and digest.
+    """
+    user_id = ""
+    name = ""
+    seed_text = ""
+
+    content_type = request.headers.get("content-type", "")
+    if "application/json" in content_type:
+        try:
+            data = await request.json()
+            user_id = str(data.get("user_id", "")).strip()
+            name = str(data.get("name", "")).strip()
+            seed_text = str(data.get("seed_text", "")).strip()
+        except Exception:
+            pass
+    else:
+        body_bytes = await request.body()
+        parsed = parse_qs(body_bytes.decode("utf-8", errors="replace"))
+        user_id = parsed.get("user_id", [""])[0].strip()
+        name = parsed.get("name", [""])[0].strip()
+        seed_text = parsed.get("seed_text", [""])[0].strip()
+
+    # Query params fallback
+    if not user_id:
+        user_id = request.query_params.get("user_id", "").strip()
+    if not name:
+        name = request.query_params.get("name", "").strip()
+    if not seed_text:
+        seed_text = request.query_params.get("seed_text", "").strip()
+
+    if not user_id or not name or not seed_text:
+        error_msg = "User ID, Display Name, and Research Interests paragraph are all required."
+        if "application/json" in content_type or request.headers.get("accept", "") == "application/json":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error_msg)
+        return templates.TemplateResponse(
+            request=request,
+            name="onboard.html",
+            context={
+                "error": error_msg,
+                "form_user_id": user_id,
+                "form_name": name,
+                "form_seed_text": seed_text,
+                "active_tab": "onboard",
+                "token": None,
+                "user": None,
+            },
+        )
+
+    # Execute create_user.py in separate subprocess to preserve web process isolation
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(CREATE_USER_SCRIPT),
+            "--user-id", user_id,
+            "--name", name,
+            "--seed-text", seed_text,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    if proc.returncode != 0:
+        logger.error("User initialization subprocess failed: %s", proc.stderr)
+        error_msg = f"User initialization failed: {proc.stderr.strip() or 'Unknown subprocess error'}"
+        if "application/json" in content_type or request.headers.get("accept", "") == "application/json":
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=error_msg)
+        return templates.TemplateResponse(
+            request=request,
+            name="onboard.html",
+            context={
+                "error": error_msg,
+                "form_user_id": user_id,
+                "form_name": name,
+                "form_seed_text": seed_text,
+                "active_tab": "onboard",
+                "token": None,
+                "user": None,
+            },
+        )
+
+    # Retrieve created or existing user from database session
+    user = session.query(User).filter_by(id=user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="User was initialized by script but not found in active database.",
+        )
+
+    if "application/json" in content_type or request.headers.get("accept", "") == "application/json":
+        return JSONResponse(
+            content={
+                "status": "ok",
+                "user_id": user.id,
+                "name": user.name,
+                "access_token": user.access_token,
+                "review_url": f"/review?token={user.access_token}",
+                "digest_url": f"/digest?token={user.access_token}",
+                "audit_url": f"/audit?token={user.access_token}",
+            }
+        )
+
+    return templates.TemplateResponse(
+        request=request,
+        name="onboard_success.html",
+        context={
+            "user": user,
+            "token": user.access_token,
+            "active_tab": "onboard",
+        },
+    )
 
 
 def authenticate_user(

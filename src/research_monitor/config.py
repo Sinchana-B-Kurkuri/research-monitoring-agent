@@ -70,6 +70,13 @@ class Config:
     LIVE_DAYS = int(os.getenv("LIVE_DAYS", "0"))
     LIVE_SLEEP_SECONDS = float(os.getenv("LIVE_SLEEP_SECONDS", "3.0"))
 
+    # Phase 9: Production Deployment & Pilot Launch configuration
+    PORT = int(os.getenv("PORT", "8000"))
+    HOST = os.getenv("HOST", "0.0.0.0")
+    DAILY_INGESTION_MAX_PAPERS = int(os.getenv("DAILY_INGESTION_MAX_PAPERS", "50"))
+    REVIEW_QUEUE_MAX_TASKS = int(os.getenv("REVIEW_QUEUE_MAX_TASKS", "15"))
+    DIGEST_MAX_ITEMS = int(os.getenv("DIGEST_MAX_ITEMS", "20"))
+
     @property
     def active_p_high(self) -> float:
         """Returns calibrated P_high if set, otherwise provisional P_high."""
@@ -95,3 +102,8 @@ SUMMARY_PROMPT_VERSION = config.SUMMARY_PROMPT_VERSION
 LIVE_MAX_RESULTS = config.LIVE_MAX_RESULTS
 LIVE_DAYS = config.LIVE_DAYS
 LIVE_SLEEP_SECONDS = config.LIVE_SLEEP_SECONDS
+PORT = config.PORT
+HOST = config.HOST
+DAILY_INGESTION_MAX_PAPERS = config.DAILY_INGESTION_MAX_PAPERS
+REVIEW_QUEUE_MAX_TASKS = config.REVIEW_QUEUE_MAX_TASKS
+DIGEST_MAX_ITEMS = config.DIGEST_MAX_ITEMS

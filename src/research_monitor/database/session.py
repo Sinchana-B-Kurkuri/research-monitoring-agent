@@ -7,7 +7,12 @@ from research_monitor.database.models import Base, create_training_labels_view
 
 logger = logging.getLogger(__name__)
 
-engine = create_engine(DATABASE_URL)
+# Resilient database engine configuration for hosted PostgreSQL & local environments
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,
+    pool_recycle=300,
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 def init_db(target_engine=None):
@@ -15,9 +20,19 @@ def init_db(target_engine=None):
     eng = target_engine or engine
     try:
         if eng.dialect.name == "postgresql":
-            with eng.begin() as conn:
-                conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
-                logger.info("Ensured pgvector extension is enabled.")
+            try:
+                with eng.begin() as conn:
+                    conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
+                    conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS access_token VARCHAR;"))
+                    conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_simulated BOOLEAN DEFAULT FALSE;"))
+                    conn.execute(text("ALTER TABLE feedback_events ADD COLUMN IF NOT EXISTS decision_id INTEGER;"))
+                    conn.execute(text("ALTER TABLE feedback_events ADD COLUMN IF NOT EXISTS is_audit BOOLEAN DEFAULT FALSE;"))
+                    logger.info("Ensured pgvector extension and column migrations are applied.")
+            except Exception as ext_err:
+                logger.warning(
+                    "Postgres pre-flight migration warning: %s",
+                    ext_err,
+                )
         Base.metadata.create_all(bind=eng)
         create_training_labels_view(eng)
         logger.info("Database schema and views initialized.")
