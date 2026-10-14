@@ -12,6 +12,14 @@ from .pipeline import (
     run_monitoring_cycle,
     score_stage,
 )
+from .preference import (
+    VectorUpdateEligibility,
+    VectorUpdateResult,
+    check_vector_update_eligibility,
+    compute_rocchio_centroid,
+    get_user_seed_embedding,
+    update_user_interest_vector,
+)
 from .router import RoutingResult, route_score
 from .state import DecisionStatus, PaperCandidate, PipelineState, Route
 from .thresholds import Thresholds, compute_vector_thresholds, load_reference_embeddings
@@ -35,4 +43,10 @@ __all__ = [
     "embed_stage",
     "score_stage",
     "route_stage",
+    "compute_rocchio_centroid",
+    "check_vector_update_eligibility",
+    "update_user_interest_vector",
+    "VectorUpdateEligibility",
+    "VectorUpdateResult",
+    "get_user_seed_embedding",
 ]

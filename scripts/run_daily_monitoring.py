@@ -132,6 +132,24 @@ def execute_daily_cycle_for_user(
         except Exception as digest_err:
             logger.warning("Could not pre-build digest for cycle %d: %s", state.cycle_id, digest_err)
 
+        # 5. Evaluate preference vector update for next cycle (Phase 10)
+        try:
+            from research_monitor.relevance.preference import update_user_interest_vector
+            vec_res = update_user_interest_vector(user_id=user.id, session=session)
+            if vec_res.status == "updated":
+                logger.info(
+                    "[VECTOR_UPDATE] Updated interest vector for '%s' to v%d (method='rocchio', t_high=%.4f, t_low=%.4f). Active for next cycle.",
+                    user.id,
+                    vec_res.version_created,
+                    vec_res.t_high,
+                    vec_res.t_low,
+                )
+                metrics["vector_updated"] = vec_res.version_created
+            else:
+                metrics["vector_status"] = vec_res.reason
+        except Exception as vec_err:
+            logger.warning("Could not evaluate vector update for user '%s': %s", user.id, vec_err)
+
         return status_tag, state.cycle_id, metrics
 
     except Exception as exc:
@@ -201,6 +219,10 @@ def run_monitoring_round(args) -> int:
                 print(f"  Papers Ingested:    {metrics.get('inserted', 0)} new (fetched {metrics.get('fetched', 0)}, skipped {metrics.get('skipped_duplicates', 0)} duplicates)")
                 print(f"  Relevance Routing:  HIGH: {metrics.get('high', 0)} | BORDERLINE: {metrics.get('borderline', 0)} | LOW: {metrics.get('low', 0)}")
                 print(f"  Delivered to Digest:{metrics.get('delivered', 0)} paper(s)")
+                if metrics.get("vector_updated"):
+                    print(f"  Preference Memory:  [UPDATED] Vector v{metrics['vector_updated']} (Rocchio centroid active for next cycle)")
+                elif metrics.get("vector_status"):
+                    print(f"  Preference Memory:  [STABLE] {metrics['vector_status']}")
                 print(f"  Review Queue URL:   http://localhost:8000/review?token={u.access_token}")
                 print(f"  Daily Digest URL:   http://localhost:8000/digest?token={u.access_token}")
             else:

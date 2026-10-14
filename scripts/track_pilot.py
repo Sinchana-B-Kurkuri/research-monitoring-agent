@@ -170,6 +170,9 @@ def inspect_user_pilot_progress(user: User, session) -> dict:
         "access_token": user.access_token,
         "active_vector": {
             "version": v_active.version if v_active else None,
+            "method": v_active.method if v_active else None,
+            "n_effective_labels": v_active.n_effective_labels if v_active else 0,
+            "built_from_max_event_id": v_active.built_from_max_event_id if v_active else None,
             "p_high": v_active.p_high_level if v_active else None,
             "p_low": v_active.p_low_level if v_active else None,
             "t_high": v_active.t_high if v_active else None,
@@ -268,7 +271,8 @@ def main() -> int:
             print(f"  Access Token:       {token_display}")
             if data["active_vector"]:
                 v = data["active_vector"]
-                print(f"  Active Vector:      v{v['version']} (t_high={v['t_high']:.4f}, t_low={v['t_low']:.4f})")
+                method_info = f" (method='{v['method']}', labels={v['n_effective_labels']})" if v.get("method") else ""
+                print(f"  Active Vector:      v{v['version']}{method_info} (t_high={v['t_high']:.4f}, t_low={v['t_low']:.4f})")
             print(f"  Daily Streak:       {progress_bar} {streak} / {target} consecutive days")
             print(f"  Total Cycles Run:   {data['total_cycles']}")
             

@@ -52,6 +52,11 @@ def main() -> None:
         default=None,
         help="Maximum candidate papers to process in this cycle.",
     )
+    parser.add_argument(
+        "--update-vector",
+        action="store_true",
+        help="Evaluate and update interest vector after cycle completion (Phase 10).",
+    )
     args = parser.parse_args()
 
     session = SessionLocal()
@@ -62,6 +67,7 @@ def main() -> None:
             mode=args.mode,
             as_of_date=args.as_of_date,
             limit=args.limit,
+            auto_update_vector=args.update_vector,
         )
 
         counts = state.counts

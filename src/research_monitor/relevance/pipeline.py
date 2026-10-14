@@ -370,6 +370,7 @@ def run_monitoring_cycle(
     limit: Optional[int] = None,
     papers_override: Optional[list[dict]] = None,
     auto_build_queue: bool = True,
+    auto_update_vector: bool = False,
 ) -> PipelineState:
     """
     Execute an autonomous monitoring cycle for a user through the explicit state machine:
@@ -459,5 +460,13 @@ def run_monitoring_cycle(
             build_review_queue(user_id=user.id, cycle_id=cycle.id, session=session)
         except Exception as e:
             logger.warning("Could not build review queue for cycle %d: %s", cycle.id, e)
+
+    # 7. Optionally trigger preference vector update for next cycle (Phase 10)
+    if auto_update_vector:
+        try:
+            from research_monitor.relevance.preference import update_user_interest_vector
+            update_user_interest_vector(user_id=user.id, session=session)
+        except Exception as e:
+            logger.warning("Could not evaluate vector update for user '%s': %s", user.id, e)
 
     return state
