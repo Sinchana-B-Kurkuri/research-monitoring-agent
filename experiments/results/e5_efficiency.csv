@@ -1,0 +1,2 @@
+p_high,p_low,t_high,t_low,total_papers_scored,high_routed,borderline_routed,low_discarded,review_queue_workload,review_queue_overflow,papers_summarized,unmitigated_llm_calls,llm_call_reduction_pct,estimated_cost_usd,unmitigated_cost_usd,cost_savings_pct
+98.0,90.0,0.98,0.9,1000,20,80,900,15,65,20,1000,98.0,0.001275,0.06375,98.0

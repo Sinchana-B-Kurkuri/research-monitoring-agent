@@ -1,0 +1,4 @@
+strategy,papers_delivered,papers_reviewed,precision,recall,f1,description
+Auto-Reject Borderline (HIGH Only),2,0,1.0,0.6666666666666666,0.8,Baseline: Discards all borderline papers without review.
+Auto-Accept Borderline (HIGH + BORDERLINE),4,0,0.75,1.0,0.8571428571428571,Baseline: Delivers all borderline papers without human filter.
+Relevance Gate with Human Review,3,2,1.0,1.0,1.0,Proposed system: Escalates borderline papers to human review.

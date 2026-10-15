@@ -3,7 +3,15 @@ Evaluation and Threshold Calibration Package (Phase 4).
 """
 
 from .access import get_test_access_history, log_test_access
-from .baselines import score_embedding_b2, score_random_b0, score_tfidf_b1
+from .baselines import (
+    evaluate_at_matched_volume,
+    score_centroid_b3,
+    score_embedding_b2,
+    score_random_b0,
+    score_tfidf_b1,
+    train_and_score_embedding_logreg_b5,
+    train_and_score_tfidf_logreg_b4,
+)
 from .calibration import (
     CalibrationResult,
     calibrate_thresholds,
@@ -58,6 +66,10 @@ __all__ = [
     "score_random_b0",
     "score_tfidf_b1",
     "score_embedding_b2",
+    "score_centroid_b3",
+    "train_and_score_tfidf_logreg_b4",
+    "train_and_score_embedding_logreg_b5",
+    "evaluate_at_matched_volume",
     "binary_map_labels",
     "weighted_precision",
     "weighted_recall",

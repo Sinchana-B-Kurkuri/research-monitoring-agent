@@ -53,3 +53,19 @@
   - B1: Keyword/TF-IDF cosine similarity to seed-interest text.
   - B2: Embedding cosine similarity to fixed seed vector.
 - **Data Protection**: `data/labels/` CSV backups and `experiments/results/*.log` are gitignored to prevent leaking human labels or access history.
+
+## Phase 13 — Pilot Completion and Final Evaluation Design
+
+- **Non-Destructive Pilot Export**: Raw pilot data in PostgreSQL is strictly read-only during export. The pipeline creates deterministic, reproducible CSVs (`data/pilot_export/pilot_records_clean.csv` and `developer_records.csv`) and an `audit_log.json` recording every exclusion rule and reason.
+- **Section 8.6 Exclusion Implementation**:
+  - Outage cycles (0 total routed or system error) are logged and excluded.
+  - Developer/test users are segregated and analyzed separately.
+  - Replay and simulated cycles are flagged and strictly separated from live pilot data.
+  - Pre-onboarding feedback events prior to the user's initial active cycle are excluded from before/after comparisons.
+  - Participants with < 5 active days or < 30 effective labels are excluded from H1/H2 before/after comparative tests, but retained for H3 end-of-pilot survey statistics.
+- **Survey Data Isolation**: End-of-pilot surveys and follow-up interview responses are saved to `data/surveys/` in JSON format, strictly isolated from model training labels and ground-truth validation labels.
+- **4-Tier Readiness Verification and Safeguards**:
+  - The evaluation suite enforces explicit state checks: `INFRASTRUCTURE_IMPLEMENTED`, `EVALUATION_PARTIALLY_AVAILABLE`, `FINAL_EVALUATION_READY`, and `FINAL_EVALUATION_EXECUTED`.
+  - Final numbers are automatically held (`can_freeze_final_numbers=False`) until all criteria are satisfied (minimum 7 consecutive daily live cycles, target human validation labels, participant surveys).
+  - Telemetry gaps (e.g. absent LLM token counts) are honestly reported as missing telemetry rather than fabricating values.
+- **Causation Disclaimer**: All before-and-after adaptation tables and figures include explicit disclaimers clarifying that temporal comparisons do not establish causal attribution due to potential exogenous shifts in arXiv submission streams.

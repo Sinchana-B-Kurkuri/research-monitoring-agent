@@ -16,3 +16,4 @@ fastapi
 uvicorn
 jinja2
 google-genai
+matplotlib

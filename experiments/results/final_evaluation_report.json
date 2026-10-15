@@ -1,0 +1,230 @@
+{
+  "phase": 13,
+  "title": "Phase 13 Pilot Completion and Final Evaluation Report",
+  "generated_at": "2026-10-15T14:42:50.751747+00:00",
+  "readiness": {
+    "tier": "EVALUATION_PARTIALLY_AVAILABLE",
+    "can_freeze_final_numbers": false,
+    "explanation": "Phase 13 evaluation infrastructure is fully implemented, verified, and testable. However, real pilot data collection and human paper labeling are still in progress. Final numerical results cannot be frozen until all criteria in Section 8 are satisfied.",
+    "missing_prerequisites": [
+      "Pilot participants: 1 genuine participant(s) found (target 3-5 users per Roadmap Section 8.6; 0 currently eligible for H1/H2 before/after evaluation)",
+      "Pilot consecutive daily live streak: 1/7 days (minimum 7 consecutive daily live cycles required; 3 total cycles recorded across 2 active days, but only 1 is live)",
+      "Live pilot cycles: 1 recorded for genuine participants (minimum 7 live cycles required; 2 replay cycles excluded from live count)",
+      "End-of-pilot surveys: 0 responses collected (surveys required for Hypothesis H3)",
+      "Summary token telemetry: No summary token records in database (cost calculations will report telemetry missing)"
+    ],
+    "total_users_with_records": 3,
+    "genuine_pilot_participants_count": 1,
+    "h1_h2_eligible_users_count": 0,
+    "developer_users_count": 1,
+    "simulated_users_count": 1,
+    "total_recorded_cycles": 5,
+    "genuine_recorded_cycles": 3,
+    "genuine_live_cycles": 1,
+    "replay_cycles_count": 4,
+    "distinct_active_calendar_days": 2,
+    "consecutive_live_calendar_days": 1,
+    "active_users_count": 1,
+    "consecutive_calendar_days": 1,
+    "live_cycles_count": 1,
+    "validation_labels_total": 171,
+    "validation_labels_dev": 121,
+    "validation_labels_test": 50,
+    "surveys_count": 0,
+    "has_token_telemetry": false,
+    "checklists": {
+      "labels": {
+        "total_labels": 171,
+        "relevant_labels": 103,
+        "test_relevant_labels": 33,
+        "target_overall_met": true,
+        "target_test_met": true,
+        "overall_shortfall": 0,
+        "test_shortfall": 0
+      },
+      "pilot": {
+        "total_users_with_records": 3,
+        "genuine_pilot_participants_count": 1,
+        "target_genuine_participants": 3,
+        "h1_h2_eligible_users_count": 0,
+        "developer_users_count": 1,
+        "simulated_users_count": 1,
+        "total_recorded_cycles": 5,
+        "genuine_recorded_cycles": 3,
+        "genuine_live_cycles": 1,
+        "genuine_replay_cycles": 2,
+        "replay_cycles_count": 4,
+        "distinct_active_calendar_days": 2,
+        "distinct_live_calendar_days": 1,
+        "consecutive_live_calendar_days": 1,
+        "target_live_streak_days": 7,
+        "surveys_collected": 0,
+        "user_eligibility_details": {
+          "phase5_verify": {
+            "name": "Phase 5 Verification",
+            "total_cycles": 3,
+            "live_cycles": 1,
+            "replay_cycles": 2,
+            "active_calendar_days": 2,
+            "effective_labels": 0,
+            "h1_h2_eligible": false,
+            "exclusion_reason": "insufficient_active_days (2 < 5); insufficient_effective_labels (0 < 30)"
+          }
+        }
+      },
+      "telemetry": {
+        "token_telemetry_present": false,
+        "surveys_present": false
+      }
+    }
+  },
+  "numbers_frozen": false,
+  "completion_status": "IN_PROGRESS_PARTIAL_DATA",
+  "e1_gate_quality": {
+    "status": "COMPLETED",
+    "test_sample_count": 150,
+    "labeled_overlap": 33,
+    "output_csv": "experiments\\results\\final_e1_gate_quality.csv"
+  },
+  "e7_pilot_evaluation": {
+    "status": "EVALUATED",
+    "timestamp": "2026-10-15T14:42:50.540783+00:00",
+    "disclaimer": "Before-and-after comparisons are descriptive and paired within user. They do not prove causation due to potential temporal shifts in arXiv submission streams and small participant sample sizes (Roadmap Section 8.6).",
+    "hypotheses": {
+      "h1": {
+        "hypothesis": "H1: digest like rate after vector/model activation is >= before",
+        "eligible_pilot_users_tested": 0,
+        "users_supporting_h1": 0,
+        "support_rate": null,
+        "status": "PENDING_OR_MIXED"
+      },
+      "h2": {
+        "hypothesis": "H2: review burden (borderline tasks/cycle) does not increase after activation",
+        "eligible_pilot_users_tested": 0,
+        "users_supporting_h2": 0,
+        "support_rate": null,
+        "status": "PENDING_OR_MIXED"
+      },
+      "h3": {
+        "total_surveys": 0,
+        "usefulness_median": null,
+        "usefulness_mean": null,
+        "summary_helpfulness_median": null,
+        "summary_helpfulness_mean": null,
+        "triage_time_median": null,
+        "triage_time_mean": null,
+        "h3_supported": false,
+        "h3_notes": "No survey responses collected yet.",
+        "free_text_responses": [],
+        "interview_summaries": []
+      }
+    },
+    "participants_count": 1,
+    "participants": [
+      {
+        "user_id": "phase5_verify",
+        "is_developer": false,
+        "is_h1_h2_eligible": false,
+        "exclusion_reason": "insufficient_active_days (2 < 5); insufficient_effective_labels (0 < 30)",
+        "active_days": 2,
+        "effective_labels": 0,
+        "h1_status": "EXCLUDED_SECTION_8_6_NO_ACTIVATION",
+        "h1_supported": null,
+        "like_rate_pre": null,
+        "like_rate_post": null,
+        "h2_status": "EXCLUDED_SECTION_8_6_NO_ACTIVATION",
+        "h2_supported": null,
+        "review_burden_pre": null,
+        "review_burden_post": null,
+        "usefulness_score": null,
+        "summary_helpfulness_score": null,
+        "triage_time_minutes": null
+      }
+    ],
+    "output_csv": "experiments\\results\\final_e7_pilot.csv"
+  },
+  "adaptation_analysis": {
+    "status": "COMPLETED",
+    "users_analyzed": 1,
+    "output_csv": "experiments\\results\\final_pilot_before_after.csv",
+    "disclaimer": "Before-and-after comparisons are descriptive and paired within user. They do not prove causation due to potential temporal shifts in arXiv submission streams and small participant sample sizes (Roadmap Section 8.6)."
+  },
+  "efficiency_analysis": {
+    "status": "COMPLETED",
+    "measured_savings_status": "NOT_MEASURABLE",
+    "measured_llm_call_reduction": null,
+    "theoretical_call_reduction": 1.0,
+    "llm_call_reduction": null,
+    "has_token_telemetry": false,
+    "actual_cost_usd": null,
+    "estimated_cost_savings_usd": null,
+    "total_review_overflow": 0,
+    "output_csv": "experiments\\results\\final_efficiency.csv",
+    "notes": [
+      "Zero LLM summaries generated in evaluated cycles and token telemetry is absent. Measured LLM usage and cost savings are NOT_MEASURABLE. Theoretical gating reduction vs summarize-everything counterfactual is reported separately."
+    ]
+  },
+  "export_summary": {
+    "total_decisions_exported": 210,
+    "clean_pilot_records_count": 20,
+    "excluded_decisions_count": 210,
+    "developer_decisions_count": 50,
+    "simulated_replay_decisions_count": 190,
+    "audit_log_path": "data\\pilot_export\\audit_log.json",
+    "output_dir": "data\\pilot_export",
+    "genuine_pilot_replay_count": 100,
+    "simulated_decisions_count": 40,
+    "is_reconciled": true,
+    "user_eligibility": {
+      "dev_phase5": {
+        "name": "Developer Phase 5",
+        "is_developer": true,
+        "is_simulated": false,
+        "total_cycles": 1,
+        "active_days": 1,
+        "effective_labels": 0,
+        "h1_h2_eligible": false,
+        "h1_h2_exclusion_reason": "insufficient_active_days (1 < 5); insufficient_effective_labels (0 < 30)"
+      },
+      "phase5_verify": {
+        "name": "Phase 5 Verification",
+        "is_developer": false,
+        "is_simulated": false,
+        "total_cycles": 3,
+        "active_days": 2,
+        "effective_labels": 0,
+        "h1_h2_eligible": false,
+        "h1_h2_exclusion_reason": "insufficient_active_days (2 < 5); insufficient_effective_labels (0 < 30)"
+      },
+      "simulated_researcher": {
+        "name": "Dr. Alex Rivera (Simulated)",
+        "is_developer": false,
+        "is_simulated": true,
+        "total_cycles": 1,
+        "active_days": 1,
+        "effective_labels": 40,
+        "h1_h2_eligible": false,
+        "h1_h2_exclusion_reason": "insufficient_active_days (1 < 5)"
+      }
+    },
+    "mutually_exclusive_partition": {
+      "clean_live_records": 20,
+      "genuine_replay_records": 100,
+      "developer_records": 50,
+      "simulated_records": 40,
+      "partition_sum": 210,
+      "is_reconciled": true
+    },
+    "overlapping_flags": {
+      "clean_records_count": 20,
+      "replay_decisions_count": 190,
+      "developer_decisions_count": 50,
+      "simulated_decisions_count": 40
+    },
+    "total_routing_decisions_exported": 210
+  },
+  "notes": [
+    "Final numbers are held until the pilot completes >= 7 consecutive daily cycles and validation labeling reaches target quotas.",
+    "Before-and-after comparisons are descriptive and paired within user. They do not prove causation due to potential temporal shifts in arXiv submission streams and small participant sample sizes (Roadmap Section 8.6)."
+  ]
+}

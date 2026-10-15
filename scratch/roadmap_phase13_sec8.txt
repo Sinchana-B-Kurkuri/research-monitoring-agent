@@ -1,0 +1,1263 @@
+Relevance-Gated Agentic Workflow for Autonomous Research Monitoring
+Implementation Roadmap and Development Plan (Final)
+Master implementation plan derived from the project proposal, the agreed development roadmap, and a full review of phase dependencies, evaluation design, pilot timing, and deployment constraints.
+Notation. [P] = specified in the project proposal. [R] = recommendation or inference added for implementation (change it only with a recorded reason in docs/decisions.md). Day N = day of the planned build of about 28–30 days.
+1. Project Implementation Overview
+This document defines the step-by-step implementation plan for the Relevance-Gated Agentic Workflow for Autonomous Research Monitoring: an autonomous system that discovers research papers, evaluates their relevance to a user’s interests, routes papers through a three-way relevance gate, requests human review for borderline cases, generates interest-framed summaries for papers that clear the gate, collects feedback, and adapts future routing using preference memory.
+The implementation follows the proposed explicit Python state-machine architecture [P] rather than a general-purpose multi-agent framework. The agentic behaviour comes from autonomous routing and adaptation decisions that are recorded and auditable.
+1.1 Core System Flow
+User Profile (seed paragraph -> interest vector v)
+        |
+        v
+Paper Discovery (bulk corpus / live arXiv API)
+        |
+        v
+Preprocessing
+        |
+        v
+Embeddings (lookup in replay mode, compute in live mode)
+        |
+        v
+Scoring: cosine(paper, v)   -- or classifier probability p once a model is promoted
+        |
+        v
+Relevance Agent (three-way routing)
+        |-- HIGH ------------> Summary Agent ----------------+
+        |-- BORDERLINE --> Review queue (asynchronous)       |
+        |        |-- Accept --> Summary Agent ---------------+
+        |        |-- Reject --> Log                          |
+        |        |-- Expire --> Log (no label)               |
+        |-- LOW ------------> Discard + Log                  |
+                                                             v
+                                                    Digest / UI
+                                                             |
+                                                             v
+                                              User Like / Dislike
+                                                             |
+Reviewer Accept / Reject ----+                               |
+                             v                               v
+                   Feedback Collection (two distinct sources: reviewer, user)
+                                      |
+                                      v
+        Preference Memory (effective labels -> interest vector -> classifier)
+                                      |
+                                      v
+        Next monitoring cycle (new vector / model version, thresholds recomputed)
+1.2 Implementation Principles
+Build incrementally: prove the smallest working pipeline before adding databases, UI, LLMs, and deployment.
+Use Antigravity as an AI engineering assistant, not as an autonomous replacement for project understanding.
+Keep the explicit state-machine design and avoid unnecessary frameworks such as LangChain, CrewAI, or AutoGen. [P]
+Persist decisions and statuses so asynchronous human review does not block the monitoring pipeline.
+Deploy a cold-start version early so real feedback can accumulate while the learning components are being built. [R]
+Express routing thresholds as percentiles of a fixed reference sample, so they remain valid when the interest vector changes and transfer across users. [R]
+Calibrate thresholds on labelled development data and report only on a frozen test split. [R]
+Keep reviewer feedback and end-user feedback as separate signals in storage; combine them only through one explicit rule. [P][R]
+Use replay mode to simulate repeated monitoring cycles without waiting for real weeks to pass, and keep replay/simulated data separate from live pilot data. [R]
+Log enough information to reproduce routing decisions, model versions, experiments, and paper results.
+Keep secrets and data files out of Git from the first commit.
+1.3 Decision Register
+These decisions must be copied into docs/decisions.md in Phase 0. Each is a default that can be changed only with a recorded reason.
+Decision
+Final decision
+Basis
+Who reviews borderline papers
+Each user reviews their own borderline queue. Limitation to state in the paper: reviewer and end user are the same person, although they act at different moments (reviewer sees the raw abstract; user reacts after the summary).
+[R]
+Seed profile format
+One descriptive paragraph embedded as a single vector. Multi-vector profiles only if validation shows a clear need.
+[P] seed interests; [R] format
+Routing vector before a classifier exists
+The current interest vector: the seed vector at version 0, then the Rocchio centroid at each later version.
+[P] §5.2; [R] details
+Threshold method
+Percentile levels (P_high, P_low) of the reference-sample score distribution under the current vector. Raw thresholds are recomputed whenever the vector changes. Levels are calibrated on labelled development data.
+[R]
+Effective label rule
+Raw events are never overwritten. For training and the centroid, one effective label per (user, paper): the latest user like/dislike if one exists; otherwise the reviewer decision; skips and expired tasks give no label.
+[R]
+Onboarding ratings of pilot users
+Used as calibration/test labels only (about 40 per user). Not used as training feedback, which preserves the proposal’s two-signal design and avoids leakage.
+[R]
+Review queue policy
+Cap of 15 tasks per user per cycle, highest score first. Overflow is logged as DEFERRED_OVERFLOW and not carried over. Undecided tasks expire after 3 days (REVIEW_EXPIRED) with no label.
+[R]
+Digest policy
+Cap of 20 items per cycle, ranked by score. HIGH papers beyond the cap are logged as DEFERRED_OVERFLOW and are not summarized.
+[R]
+Embedding model and text
+all-MiniLM-L6-v2 (384-d) on title + abstract, L2-normalized at storage. Other models only as an optional ablation.
+[R]
+LLM provider
+Any hosted API behind one wrapper function; model name and prompt version are logged.
+[P] hosted API; [R] wrapper
+Where data lives
+Full 50–100k corpus stays in local Postgres/Parquet for replay and experiments. The deployed database holds the reference sample plus live papers (and more only if the provider limits allow).
+[R]
+Ground-truth mapping
+Three-point label. Primary binary metric: relevant = 1; somewhat and not relevant = 0. Lenient sensitivity analysis: relevant + somewhat = 1. The simulated oracle uses the primary mapping.
+[R]
+Pilot design
+3–5 users including the developer; launch by Day 20; at least 7 consecutive daily cycles.
+[R]
+Audit sample of LOW papers
+Optional, off by default.
+[R]
+2. Target Implementation Architecture
+Proposal Module
+Implementation Component
+Main Responsibility
+Paper Discovery
+ingestion/
+Load the historical corpus and fetch new papers from arXiv.
+Embedding + Similarity Scoring
+embeddings.py + gate/scoring.py
+Generate embeddings and compute relevance scores against the active interest vector.
+Relevance Agent
+gate/router.py
+Route papers to HIGH, BORDERLINE, or LOW using percentile-derived thresholds or the promoted classifier.
+Summary Agent
+summarizer.py (includes the LLM wrapper)
+Generate short interest-framed summaries only after the gate.
+Human Review
+web review queue + review_tasks
+Accept/reject borderline papers asynchronously.
+Digest Delivery
+digest page + digests / digest_items
+Present gate-cleared papers and summaries to the user.
+Feedback Collection
+web feedback routes + feedback_events
+Record user like/dislike and reviewer accept/reject as separate sources.
+Preference Memory
+preference/ + interest_vector_versions + model_versions
+Derive effective labels, update the interest vector, train and promote the logistic regression classifier.
+2.1 Asynchronous Human Review
+Human review cannot be a blocking function inside a monitoring run. A borderline paper is persisted as a review task with status PENDING_REVIEW. The cycle finishes; the reviewer decides later. A resume step then moves ACCEPTED papers to SUMMARIZE_PENDING (and on to the digest), while REJECTED and EXPIRED papers end in terminal statuses. The resume step is idempotent and can be re-run safely.
+2.2 Replay Mode
+Replay mode processes historical papers as if they arrived in separate monitoring cycles (for example week by week) using the cycle parameter as_of_date. It uses precomputed embeddings, so no embedding model call is needed.
+Replay runs locally against the full corpus. Replay cycles are tagged mode = replay, and simulated users are tagged is_simulated = true, so they can never be confused with live pilot data.
+=== LINE 137 ===
+Replay can optionally use a simulated-feedback oracle (the labelled development pool, Section 8.4) to react to delivered papers and decide borderline papers. This is how repeated cycles, feedback accumulation, retraining, and changed routing are demonstrated without waiting for real time.
+2.3 Shared versus Per-User Processing
+Global (once per paper): ingestion, preprocessing, embedding. Embeddings are L2-normalized at storage time, so a dot product equals cosine similarity.
+Per user: scoring, routing, review, digest, feedback, interest vectors, and models. All per-user tables are keyed by user_id.
+The embed node has two behaviours: in replay mode it looks up stored embeddings; in live mode it computes embeddings for newly fetched papers.
+At 50–100k papers, exact vector search is sufficient. No vector index is required, and scoring all papers against one vector is a trivial NumPy operation. Postgres/pgvector [P] is used for storage and convenient queries.
+2.4 Runtime Architecture and Deployment Constraints
+Hosted free tiers are small, and the embedding model requires PyTorch. The deployed system is therefore split into three runtime pieces. [R]
+Runtime piece
+Contains
+Constraints
+Web service (always on)
+FastAPI + Jinja2 + HTMX: review queue, digest, feedback, audit pages. Calls the LLM API only for summarizing a just-accepted paper (background task; on failure the status stays SUMMARIZE_PENDING and the next cycle retries).
+Must not import sentence-transformers or PyTorch. Never embeds text. Pilot users are created by the developer through a CLI command (the seed paragraph is embedded there), not by a web signup form.
+Cycle worker (scheduled)
+run-cycle: fetch, embed, score, route, queue reviews, summarize, build digests, compute effective labels, update vectors, retrain and promote models.
+Runs as a scheduled job (GitHub Actions cron, host cron, or a manual daily run as fallback). Needs only database URL and API keys from environment variables. Stores trained models in the database (model_blob), because the worker’s filesystem may be ephemeral. Cache the embedding model between runs where possible.
+Managed PostgreSQL + pgvector
+Deployed database.
+Vectors cost about 1.5 KB each (384 floats), so 100k papers is about 150 MB before text. Check provider storage limits. The deployed database needs only the reference sample plus live papers; the full corpus stays local.
+Local environment
+Full corpus, replay mode, experiments, labelling tool if preferred.
+Experiments read Parquet and embedding arrays, not the deployed database.
+3. Technology Stack
+Need
+Technology
+Purpose
+Programming
+Python 3.11+
+Core implementation.
+Development
+Antigravity
+AI-assisted planning, coding, testing, and debugging.
+Version control
+Git + GitHub
+Source control, backup, history, portfolio, and issue tracking.
+Data processing
+pandas, NumPy, PyArrow, SciPy
+Filtering, Parquet storage, analysis, bootstrap confidence intervals.
+Embeddings
+Sentence Transformers (all-MiniLM-L6-v2)
+384-dimensional sentence embeddings.
+Database
+PostgreSQL + pgvector (Docker for local development)
+Persistent data and embedding storage.
+DB access
+SQLAlchemy 2.x + pgvector Python package
+Application/database layer. Use create_all; skip migration tooling.
+ML
+scikit-learn (LogisticRegression, TfidfVectorizer)
+Feedback-driven classifier and the TF-IDF baselines.
+Backend
+FastAPI + Jinja2 + HTMX
+Server-rendered review, digest, and audit pages.
+Fallback UI
+Streamlit
+Simpler UI option if development time becomes constrained.
+LLM
+Hosted LLM API behind one wrapper
+Interest-framed summaries after relevance gating; mock implementation for tests.
+Live arXiv
+arxiv Python package
+Rate-limited retrieval of new papers.
+Scheduling
+CLI first; then GitHub Actions cron or host cron
+Automated monitoring cycles. Manual daily run is an acceptable fallback.
+Testing
+pytest + a ~50-paper fixture dataset (JSON, so it is not caught by the Parquet ignore rule)
+Unit and integration tests; router boundaries and status transitions first.
+Configuration
+.env + pydantic-settings
+Configuration and secret management.
+Deployment
+Web service (no PyTorch) + scheduled worker + managed PostgreSQL
+Final hosted system (Section 2.4).
+3.1 Technologies Deliberately Avoided
+LangChain
+CrewAI
+AutoGen
+Celery
+Redis
+Kubernetes
+React
+LLM fine-tuning
+Reinforcement learning
+Migration tooling and vector indexes (not needed at this scale)
+Multiple autonomous agents where a simple state-machine function is sufficient.
+4. Repository Structure
+relevance-gated-monitoring/
+|-- README.md
+|-- requirements.txt
+|-- .gitignore                 # created BEFORE the first commit (Section 11)
+|-- .env.example               # placeholder values only
+|-- docker-compose.yml         # local Postgres + pgvector only
+|-- .github/workflows/         # scheduled worker (created in Phase 9)
+|-- src/monitor/
+|   |-- config.py              # all parameters from Appendix A
+|   |-- db/{models.py, session.py}
+|   |-- ingestion/{dataset.py, live_arxiv.py, preprocess.py}
+|   |-- embeddings.py
+|   |-- gate/{scoring.py, thresholds.py, router.py}
+|   |-- summarizer.py          # includes the single LLM wrapper + prompt
+|   |-- preference/{labels.py, centroid.py, classifier.py, retrain.py}
+|   |-- pipeline/{state.py, nodes.py, runner.py}
+|   |-- web/{app.py, templates/, static/}
+|   `-- cli.py                 # ingest, create-user, run-cycle, replay, retrain, simulate-feedback
+|-- scripts/                   # one-off data download/filter scripts
+|-- experiments/               # one script per experiment + results/ (CSV, PNG)
+|-- data/                      # gitignored: raw/, processed/, labels/
+|-- tests/
+`-- docs/decisions.md          # decision register + deployment log
+Do not create the complete repository structure on day one. Create components as their implementation phase begins. gate/thresholds.py holds the percentile-threshold logic; preference/labels.py holds the effective-label rule.
+5. Step-by-Step Implementation Phases
+5.0 Dependency Summary
+Phase
+Depends on
+Enables
+0 Foundation
+—
+1
+1 Tiny prototype
+0
+2
+2 Real corpus + reference sample
+1
+3
+3 PostgreSQL + pgvector
+2
+4, 5
+4 Ground truth, baselines, calibration (labelling runs as a background track from ~Day 3; frozen by Day 14)
+2, 3
+5 (provisional levels), 9 (frozen levels), 12
+5 State machine + cold-start gate
+3 (levels from 4, provisional is enough)
+6
+6 Review, digest, feedback UI
+5
+7, 10
+7 Gated LLM summarization
+6
+8
+8 Live arXiv monitoring
+5, 7
+9
+9 Cold-start deployment + pilot launch (by Day 20)
+4 (frozen), 6, 7, 8
+10, 11, 13
+10 Preference memory: interest vector
+5, 6
+11, 12
+11 Logistic regression model
+10
+12, 13
+12 Offline experiment suite
+4, 5, 10, 11
+13
+13 Pilot completion + final evaluation
+9, 12
+14
+14 Demo + ACM paper
+13
+—
+Phases 10, 11, and 12 are built while the pilot is already running. Each change to routing (new vector, promoted model) is logged by version, so the pilot itself yields before/after evidence.
+Phase 0 — Environment and Project Foundation
+Establish a clean development environment and source-control foundation before implementing application logic.
+Depends on: nothing.
+Tasks
+Verify Python 3.11+ and Git installations.
+Create the GitHub repository (keep it private until Phase 14 cleanup) and clone it locally.
+Create and activate a Python virtual environment.
+Create README, requirements.txt, .gitignore (with every entry from Section 11) and .env.example before the first commit.
+Open the project in Antigravity.
+Create docs/decisions.md and copy the Decision Register (Section 1.3) into it.
+Write the main user’s seed interest paragraph (short, descriptive).
+Obtain an LLM API key and store it only in the local .env file.
+Choose the corpus date range and evaluation window.
+Technologies
+Python
+Git
+GitHub
+Antigravity
+Deliverables
+Working repository
+Virtual environment
+Initial documentation and decision register
+Initial Git commit
+Verification
+Fresh clone works
+Virtual environment activates
+Required packages import successfully
+git status shows .env and data/ are ignored; no secret appears in the commit
+Next: Phase 1.
+Phase 1 — Tiny Embedding Prototype
+Prove the core idea before introducing databases, web interfaces, LLMs, or deployment.
+Depends on: Phase 0.
+Tasks
+Prepare a small set of approximately 200 papers.
+Embed title + abstract using Sentence Transformers; L2-normalize.
+Embed the seed interest paragraph.
+Calculate cosine similarity between the profile and each paper; sort.
+Assign HIGH, BORDERLINE, and LOW using temporary cut points (for example top 10% HIGH, bottom 60% LOW). The final percentile levels are calibrated in Phase 4.
+Inspect the highest- and lowest-scoring papers manually.
+Technologies
+Jupyter
+Sentence Transformers
+NumPy
+pandas
+Deliverables
+Prototype notebook/script
+Ranked paper table
+Initial three-way routing result
+Verification
+Top papers are generally more relevant than bottom papers
+Similarity values are reproducible
+Embedding norms are 1 (after normalization)
+Next: Phase 2.
+Phase 2 — Real Corpus, Reference Sample, and Embedding Pipeline
+Move from a toy dataset to a real arXiv corpus, scaling incrementally, and create the fixed reference sample that all thresholds depend on.
+Depends on: Phase 1.
+Tasks
+Obtain the arXiv metadata snapshot.
+Stream-filter to the selected categories (cs.CL, cs.LG, cs.AI) [P] and the chosen date range; never load the full file into memory.
+Deduplicate by version-stripped arXiv ID.
+Normalize whitespace and text encoding.
+Remove withdrawn or empty-abstract records.
+Write a Parquet working dataset.
+Scale gradually: approximately 5k → 10k → 20k → 50k+ (target 50–100k [P]) rather than requiring 100k immediately.
+Batch-generate L2-normalized embeddings for title + abstract; record the time taken.
+Draw the reference sample: 5,000 random corpus papers with a fixed seed; record their IDs. These define all percentile thresholds and are excluded from the labelling frame.
+Technologies
+pandas
+PyArrow
+Sentence Transformers
+NumPy
+Deliverables
+Filtered Parquet corpus
+Embedding files or database-ready records
+Reference-sample ID list
+Data-quality report
+Verification
+No duplicate IDs
+Expected category/date distribution
+Embeddings generated in batches; same text gives the same vector
+Reference sample reproducible from its seed
+Next: Phase 3.
+Phase 3 — PostgreSQL + pgvector Data Layer
+Introduce persistent storage once the data and embedding pipeline are understood.
+Depends on: Phase 2.
+Tasks
+Start PostgreSQL with pgvector locally using Docker Compose.
+Create the papers table (including embedding, embedding_model, and an is_reference flag).
+Create database session/configuration code.
+Load the processed corpus and flag the reference sample.
+Keep a Parquet backup of the processed dataset.
+Fallback if Docker is blocked: SQLite + NumPy behind the same data-access functions, migrating to Postgres before Phase 9.
+Technologies
+PostgreSQL
+pgvector
+SQLAlchemy
+Docker
+Deliverables
+Working database
+papers table
+Database access layer
+Loaded corpus
+Verification
+Expected row count; exactly 5,000 reference papers
+Unique arXiv IDs
+Known-paper lookup returns sensible results
+Next: Phases 4 and 5. Start the labelling track (Phase 4) immediately; do not wait for Phase 5.
+Phase 4 — Ground Truth, Baselines, and Threshold Calibration
+Create a trustworthy evaluation foundation. Labelling is a background track that begins about Day 3 (about 60 labels per day) and must be frozen by Day 14. Phase 5 may proceed with provisional levels in the meantime.
+Depends on: Phases 2 and 3.
+Tasks
+Build a simple labelling tool (script or FastAPI page) with three-point labels: relevant / somewhat / not relevant. Store labels in validation_labels and export timestamped CSV copies to data/labels/ (gitignored; back them up outside Git).
+Define the sampling frame: evaluation-window corpus papers excluding the reference sample.
+=== LINE 413 ===
+Score the frame with the seed vector and define five strata by reference-percentile bands (Section 8.1). Label about 500 papers according to the stratum allocation.
+Record for every label: stratum and sampling_weight (stratum population / stratum sample size).
+Target at least 100 relevant labels overall and at least 30 relevant labels in the test split. If short, label more papers in the high-similarity strata (updating weights consistently) before freezing.
+Split within each stratum: 70% development, 30% test. Freeze the test split; log every access to it in experiments/results/test_access.log.
+Implement baselines B0 (random) and B1 (keyword/TF-IDF cosine to seed text) and evaluate B2 (cosine to the fixed seed vector).
+Implement the metric code: weighted precision/recall/F1, PR-AUC, LOW miss rate, BORDERLINE composition, stratified bootstrap confidence intervals.
+Calibrate (P_high, P_low) on the development split using the objective in Section 7.2. Save to config as the calibrated levels.
+Technologies
+FastAPI + Jinja or a simple labelling script
+scikit-learn
+pandas
+SciPy
+Deliverables
+validation_labels (dev/test split, strata, weights)
+Baseline results (B0–B2)
+Calibrated percentile-level configuration
+Metric library
+Verification
+Metrics are reproducible
+Levels are selected on the development split, never on the test split
+Weights reproduce known stratum populations
+Test-access log shows no use before final reporting
+Next: Phase 5 (uses provisional levels immediately); frozen levels are required by Phase 9.
+Phase 5 — Relevance Agent and Explicit State Machine (Cold Start)
+Implement the autonomous routing core and make every decision auditable.
+Depends on: Phase 3 (and provisional levels from Phase 4).
+Tasks
+Create the tables users, interest_profiles, interest_vector_versions, cycles, and routing_decisions.
+CLI create-user: embed the seed paragraph and create interest vector version 0.
+Define the pipeline state object.
+Implement discover → preprocess → embed → score → route. The embed node does a lookup in replay mode and computes embeddings in live mode.
+Implement percentile thresholds: score the 5,000 reference papers under the active vector, take the P_high and P_low percentiles as t_high and t_low, and store them on the vector version.
+Implement HIGH / BORDERLINE / LOW routing against the active interest vector.
+Persist one routing decision per (user, paper), including LOW papers: score, method, thresholds, vector version, model version (null at this stage), route, status, and reason.
+Implement monitoring cycles with mode (replay/live) and as_of_date; flag simulated users.
+Add CLI commands to run cycles.
+Write router boundary tests and state-transition tests (Section 9.1).
+Technologies
+Plain Python
+SQLAlchemy
+pytest
+Deliverables
+State-machine implementation
+Routing audit log
+Replay-capable CLI
+Verification
+Boundary tests pass (scores equal to a threshold route as specified)
+Counts match manual calculations on fixture data
+Every paper receives an auditable route; re-running a cycle creates no duplicate decisions
+About (100 − P_high)% of reference papers score at or above t_high
+Next: Phase 6.
+Phase 6 — Human Review, Digest, and Feedback UI
+Make the human-in-the-loop workflow usable and asynchronous, and implement the feedback rules once.
+Depends on: Phase 5.
+Tasks
+Create the tables review_tasks, digests, digest_items, feedback_events, and the training_labels view (effective-label rule, Section 7.3).
+Review queue for BORDERLINE papers: cap 15 per user per cycle, highest score first; show title, abstract, score, and routing reason.
+Accept, Reject, and Skip. Persist tasks and decisions. Skip is recorded on the task only (no feedback event) and leaves it pending; tasks expire after 3 days (REVIEW_EXPIRED).
+Log queue overflow as DEFERRED_OVERFLOW.
+Implement resume_after_review: accepted papers become SUMMARIZE_PENDING; until Phase 7 they appear in the digest with their abstract (via = review).
+Digest page: HIGH papers (via = auto) and review-accepted papers (via = review), capped at 20 by score; overflow is DEFERRED_OVERFLOW.
+Like/Dislike controls on digest items; every click writes one feedback event with source = user.
+Every accept or reject writes one feedback event with source = reviewer.
+Audit page listing discarded papers with their scores.
+Per-user access via an access token in the URL.
+Optional: audit sample — up to 3 randomly chosen LOW papers per cycle enter the review queue as kind = audit, are never added to the digest, and their labels are flagged is_audit. Off by default.
+Technologies
+FastAPI
+Jinja2
+HTMX
+Deliverables
+Review queue
+Digest page
+Audit page
+Feedback events and effective-label view
+Verification
+Accepted borderline papers appear in the next digest; rejected and expired ones never do
+Each click creates exactly one event with the correct source
+Effective-label tests pass: reviewer accept then user dislike gives label 0; two user reactions give the latest; skip and expiry give no label
+Caps are enforced and overflow is logged
+Next: Phase 7.
+Phase 7 — Gated LLM Summarization
+Generate interest-framed summaries only for papers that clear the relevance gate. [P]
+Depends on: Phase 6.
+Tasks
+Create a thin LLM wrapper (single call per paper, low temperature).
+Define a prompt using abstract + user interests; version the prompt.
+Create the summaries table with model, prompt version, and token counts.
+Summarize HIGH papers that make the digest (within the 20-item cap) automatically.
+Summarize review-accepted borderline papers: the web service triggers this as a background task after the click (LLM call only); failures leave SUMMARIZE_PENDING for the worker to retry.
+Cache summaries to avoid duplicate API calls.
+Create a mock LLM for tests.
+Show summaries in digest items in place of raw abstracts.
+Technologies
+Hosted LLM API and Python SDK
+pytest
+Deliverables
+LLM wrapper
+Summary cache
+Interest-framed digest summaries
+Verification
+No LOW, DEFERRED_OVERFLOW, REJECTED, or EXPIRED paper receives a summary
+Re-runs make no duplicate API calls
+Sample summaries are faithful to source abstracts (read at least 10)
+Web service still runs without PyTorch installed
+Next: Phase 8.
+Phase 8 — Live arXiv Monitoring
+Connect the same pipeline to genuinely new papers.
+Depends on: Phases 5 and 7.
+Tasks
+Implement live arXiv retrieval restricted to the selected categories.
+Respect arXiv API rate limits (about one request per 3 seconds); retry with backoff.
+Deduplicate against existing papers by version-stripped ID, including cross-listed duplicates.
+Embed newly discovered papers (live mode embed node).
+Run the existing relevance pipeline unchanged, with cycles tagged mode = live.
+Decide the start point: live ingestion starts on deployment day; history is covered by replay mode. arXiv announces in daily batches, so some days may have few or no new papers.
+Confirm run-cycle works headless: only database URL and API keys from environment variables, no interactive input.
+Log network failures and retry safely.
+Technologies
+arxiv Python package
+CLI
+Deliverables
+Live ingestion module
+Headless run-cycle command
+Verification
+No duplicate papers across reruns
+New papers reach the same routing pipeline
+Temporary failures do not crash the cycle
+Next: Phase 9.
+Phase 9 — Cold-Start Deployment and Pilot Launch
+Deploy the working system as early as possible so real feedback accumulates while the learning components are built. Hard rule: launch no later than Day 20, and run at least 7 consecutive daily cycles. If launch slips past Day 20, reduce the pilot to a feasibility pilot, report E7 descriptively, and rely on simulation for E2–E4.
+Depends on: Phase 4 (frozen levels), Phase 6, Phase 7, and Phase 8.
+Tasks
+Freeze the calibrated percentile levels and the label splits.
+Deploy the web service (without the embedding model) and a managed PostgreSQL with pgvector. Load the reference sample and the papers the pilot needs; check storage limits (Section 2.4).
+Configure secrets as host environment variables and scheduler secrets. Never commit them.
+Create the scheduled worker (GitHub Actions cron or host cron). Document the manual daily-run fallback.
+Create 3–5 pilot users (including the developer) with the local CLI pointed at the deployed database URL, from their seed paragraphs; give each an access link.
+=== LINE 551 ===
+Onboarding labels: each pilot user rates about 40 papers stratified by the same reference-percentile bands as Section 8.1 under their own seed vector (20 calibration, 20 pilot_test) stored in validation_labels. Use the calibration labels only to sanity-check the default percentile levels for that user; adjust a user’s levels only if clearly off and at least 5 relevant labels exist. They are not training feedback.
+Set caps (review 15, digest 20) and give pilot instructions: react to at least 10 digest items per day and clear the review queue daily.
+Record the launch version as cold-start v0 in docs/decisions.md.
+Run daily cycles and check the worker log each day.
+Technologies
+Chosen hosting platform
+Managed PostgreSQL
+GitHub Actions or host scheduler
+Python deployment runtime
+Deliverables
+Public/deployed URL
+Pilot users with access links
+Daily digests
+Accumulating feedback
+Deployment notes
+Verification
+A new user can open the link and use the digest and review queue without developer help
+Scheduled cycles run unattended on two consecutive days
+Feedback is recorded with the correct sources
+The web service runs within the host’s memory limit without PyTorch
+No secret or data file exists in the repository history
+=== LINE 572 ===
+Next: Phases 10, 11, and 12 proceed while the pilot runs; Phase 13 closes it.
+Phase 10 — Preference Memory: Interest Vector (Centroid)
+Introduce adaptive personalization before switching to a learned classifier. The updated centroid becomes the routing vector in cold-start mode.
+Depends on: Phases 5 and 6.
+Tasks
+Read effective labels from the training_labels view (Section 7.3).
+Implement the Rocchio-style update with alpha = 1.0, beta = 0.75, gamma = 0.25 (omit the negative term if no negatives exist).
+Trigger the first update at 10 effective labels with at least 3 positives, then after every 25 new effective labels.
+Store each result as a new interest_vector_versions row with built_from_max_event_id; keep all versions.
+Recompute t_high and t_low from the stored percentile levels under the new vector, using the reference sample, every time a version is created.
+The new version becomes active from the next cycle; routing decisions record the vector version used.
+Keep logging cosine to the fixed seed vector as a diagnostic and for baseline B2.
+Deploy to the pilot (target about Day 21) and record each user’s activation date.
+Technologies
+NumPy
+PostgreSQL
+Deliverables
+Centroid update module
+Versioned interest vectors with thresholds
+Logged activation dates
+Verification
+Likes pull the centroid toward liked papers (cosine to them rises); dislikes push it away
+Recomputing from the same events gives the same vector
+After each update, the share of reference papers above t_high equals the target share (thresholds shift, shares do not)
+Routing of a fixed paper set changes in the expected direction
+Next: Phase 11.
+Phase 11 — Logistic Regression Preference Model
+Move from similarity thresholds to a feedback-trained classifier when sufficient data exists. [P]
+Depends on: Phase 10.
+Tasks
+Train only when there are at least 30 effective labels (50 preferred) with at least 8 positives and 8 negatives; retrain after every 25 new effective labels.
+Train scikit-learn LogisticRegression on normalized embeddings with L2 regularization, class_weight = balanced, and C chosen from {0.1, 0.3, 1.0} by inner cross-validation.
+Evaluate with repeated stratified 5-fold cross-validation (out-of-fold predictions).
+Promotion guard: promote only if out-of-fold ROC-AUC is at least 0.65 and at least the out-of-fold AUC of cosine-to-current-centroid scoring on the same labels plus 0.02. Otherwise keep the previous method.
+Classifier thresholds: start with p_high = 0.70 and p_low = 0.30 as provisional values. Because balanced class weights distort probabilities, calibrate them with the Section 7.2 objective (development labels for the developer; out-of-fold predictions for pilot users). Record which was used.
+Store each model in model_versions with trained_on_max_event_id and the serialized model in model_blob.
+Switch routing from threshold mode to classifier mode only after promotion. Store the model version on every routing decision.
+Keep logging cosine to the active vector.
+Add nearest-liked and nearest-rejected paper explanations to the review UI.
+Run retraining in the worker, never in a web request.
+Technologies
+scikit-learn
+NumPy
+PostgreSQL
+Deliverables
+Classifier
+model_versions records
+Adaptive routing
+Decision explanations
+Verification
+A model failing the guard is not promoted
+Old versions remain reproducible (blob + event cutoff)
+Routing method and version are logged on every decision
+The same papers route differently before and after promotion (recorded)
+Next: Phase 12.
+Phase 12 — Offline Experiment Suite
+Generate the quantitative evidence required for the research paper. Run locally against Parquet and embedding arrays.
+Depends on: Phases 4, 5, 10, and 11. E1 can start once Phase 4 and Phase 5 are done; E2–E4 need Phases 10 and 11.
+Tasks
+Implement baselines B3 (cosine to updated centroid), B4 (TF-IDF + logistic regression), and B5 (embedding classifier ablations) in addition to B0–B2.
+=== LINE 632 ===
+Implement simulation Protocols A and B (Section 8.4) and the simulated-feedback oracle (CLI simulate-feedback).
+Implement E1 gate quality, E2 learning curves, E3 signal ablation, E4 centroid-update evaluation, E5 efficiency, E6 human-review value; E8 only if time allows.
+Use 10 random seeds, stratified bootstrap confidence intervals, and the test split only for final numbers.
+Save result CSV files and figures under experiments/results/.
+Prepare the demo database snapshot with prerecorded feedback (Phase 14).
+Technologies
+pandas
+scikit-learn
+SciPy
+matplotlib
+Deliverables
+Baseline table
+Learning curves
+Ablation results
+Efficiency results
+PNG figures
+Demo snapshot
+Verification
+Same seed reproduces identical results
+Every figure can be regenerated from a script
+The test split is used only in final-reporting scripts (access log)
+=== LINE 653 ===
+Next: Phase 13.
+=== LINE 654 ===
+Phase 13 — Pilot Completion and Final Evaluation
+Close the pilot and combine offline experiments with real pilot data.
+Depends on: Phases 9 and 12.
+Tasks
+End the pilot (minimum 7 cycles; target Day 27–28).
+=== LINE 659 ===
+Export pilot data; apply the exclusion rules (Section 8.6); report developer-user data separately.
+Collect the end-of-pilot survey (usefulness and summary helpfulness on a 5-point scale, triage-time estimate, free text) and brief interviews.
+=== LINE 661 ===
+Run the final E1–E7 analysis with precision, recall, F1, and the additional metrics in Section 8.
+Compare pilot behaviour before and after each user’s vector/model activation date.
+Calculate LLM-call reduction and token/cost savings; analyze review workload and overflow.
+Document limitations and null results honestly (including reviewer = user, small N, and percentile-fixed routed share).
+Freeze final numbers.
+Technologies
+pandas
+NumPy
+SciPy
+matplotlib
+Deliverables
+Final tables
+Final figures
+Pilot statistics
+Evaluation dataset and scripts
+Verification
+All paper numbers match analysis script outputs
+All figures can be regenerated
+Next: Phase 14.
+Phase 14 — Final Demonstration and ACM Paper
+Package the completed system into a reproducible demonstration and a research paper. Draft the non-results sections earlier (Section 12).
+=== LINE 682 ===
+Depends on: Phase 13.
+Tasks
+Prepare a scripted 10-minute demonstration following Section 14, using the demo snapshot.
+Extend the proposal with implementation, experiments, results, discussion, limitations, and conclusion; never pre-write numerical results.
+Format the paper using the ACM template; add captions and references for figures and tables.
+Document the summarization prompt and implementation details in an appendix.
+Clean the repository (secrets check, README, run instructions) and then make it public if desired.
+Verify that a new user can follow the README and run a replay cycle.
+Technologies
+ACM paper template
+GitHub
+Final application
+Deliverables
+Final demo
+Final ACM paper
+Complete GitHub repository
+Reproducible experiment suite
+Verification
+End-to-end demo works from the snapshot
+README is sufficient for reproduction
+Paper results match implementation outputs
+Next: Done.
+6. Database Design
+The database is introduced incrementally (Section 6.1). The following is the target schema once the complete system is implemented.
+Table
+Purpose
+Important Fields
+papers
+Corpus
+arxiv_id (unique, version-stripped), title, abstract, authors, category, submitted_date, source (dataset/live), embedding (vector 384, normalized), embedding_model, is_reference
+users
+Pilot and simulated users
+id, name, access_token, is_simulated, created_at
+interest_profiles
+Seed profile
+user_id, seed_text, seed_embedding, created_at
+interest_vector_versions
+Preference memory: routing vector
+id, user_id, version, vector, method (seed/rocchio), n_effective_labels, built_from_max_event_id, p_high_level, p_low_level, t_high, t_low, created_at, is_active
+cycles
+Monitoring runs
+id, user_id, as_of_date, mode (replay/live), started_at, finished_at, counts, config_snapshot
+routing_decisions
+Core audit log (unique per user + paper)
+paper_id, user_id, cycle_id, cosine_score (active vector), vector_version_id, clf_prob, method (threshold/classifier), model_version_id, thresholds used, route, status, reason, created_at
+review_tasks
+Human review queue
+decision_id, kind (borderline/audit), queued_at, shown_at, reviewer decision (accept/reject/skip; skip is recorded here only), decided_at, expired_at
+summaries
+LLM outputs
+decision_id, text, llm_model, prompt_version, tokens_in/out, created_at
+digests / digest_items
+Delivery
+digests: user_id, cycle_id, created_at. digest_items: digest_id, decision_id, position, via (auto/review), shown_at
+feedback_events
+User and reviewer signals (append-only)
+user_id, paper_id, decision_id, source (user/reviewer), label (1/0), is_audit, created_at (skips create no event)
+training_labels (view)
+Effective label per (user, paper)
+user_id, paper_id, label, origin (user/reviewer), event_id; rule in Section 7.3
+model_versions
+Classifier versions
+user_id, version, trained_at, n_samples, n_pos, n_neg, hyperparameters, oof_auc, oof_auc_cosine_baseline, promoted, p_high, p_low, threshold_calibration_source, trained_on_max_event_id, vector_version_id, model_blob, is_active
+validation_labels
+Ground truth
+user_id, paper_id, label (relevant/somewhat/not), sampling_stratum, sampling_weight, split (dev/test/calibration/pilot_test), labelled_at
+6.1 Tables by Phase
+Phase
+Tables created
+3
+papers (with is_reference)
+4
+validation_labels
+5
+users, interest_profiles, interest_vector_versions, cycles, routing_decisions
+6
+review_tasks, digests, digest_items, feedback_events, training_labels (view)
+7
+summaries
+10
+new rows in interest_vector_versions (no new table)
+11
+model_versions
+6.2 Logging Requirements
+Every routing decision, including discarded papers.
+Exact threshold values and percentile levels used at routing time, and the vector/model version.
+Scoring method and cosine to the active vector for every paper (even in classifier mode).
+Summary model, prompt version, token counts, and cost where available.
+Review timings, outcomes, expiry, and overflow.
+Digest position and subsequent user reaction.
+Feedback source and label (raw events preserved; effective labels derived).
+Training data counts, cross-validation metrics, promotion decisions, and calibration source.
+Cycle mode (replay/live), simulated-user flag, and activation dates of each vector/model version.
+Test-split access log.
+7. AI/ML Decision Logic
+7.1 Interest Vector and Scoring
+Each user has an active interest vector v. Version 0 is the embedded seed paragraph. Later versions are Rocchio centroids (Section 7.4). The routing score before a classifier exists is s = cosine(paper_embedding, v). Because embeddings are normalized, this is a dot product.
+7.2 Percentile Thresholds and Calibration (Cold Start)
+For the active vector, score the 5,000 reference papers. t_high is the P_high percentile and t_low is the P_low percentile of those scores. Thresholds are therefore recomputed automatically whenever the vector changes. [R]
+Routing: s ≥ t_high → HIGH; s ≤ t_low → LOW; otherwise BORDERLINE. [P] (threshold-based cold start)
+Provisional levels before calibration: P_high = 98, P_low = 90.
+Calibration objective (development split, weighted): choose the smallest P_high whose HIGH precision is at least 0.80; choose the largest P_low whose LOW miss rate (fraction of relevant papers routed LOW) is at most 10%, aiming for 5%; require P_low < P_high. If a target is unattainable, take the best achievable value and report it. Always report the BORDERLINE share and composition.
+Pilot users start from the developer’s calibrated levels (percentile levels transfer across users better than raw cosine values), sanity-checked on their calibration labels.
+Known trade-off: percentile thresholds fix the share of papers routed to each class for a stream similar to the reference sample. Report routed shares as a consequence of the chosen levels, with a sensitivity analysis (for example P_high in {95, 98, 99}), not as a finding in itself.
+7.3 Feedback Rules and Effective Labels
+Two sources are stored separately: reviewer decisions on borderline papers and user reactions to delivered papers. [P] Raw events are append-only.
+Training, centroid updates, and cross-validation use one effective label per (user, paper): the most recent user like/dislike if one exists; otherwise the reviewer decision; skip and expired tasks give no label. [R]
+Audit-sample labels (optional) are reviewer-source labels flagged is_audit and may be included or excluded in analyses.
+Ablations (E3) derive user-only, reviewer-only, and combined label sets from the raw events with the same rule.
+Pilot onboarding ratings live in validation_labels and never enter training_labels.
+7.4 Interest Vector Update (Rocchio-Style)
+c = normalize( alpha*c0 + beta*mean(effective positives) - gamma*mean(effective negatives) )
+alpha = 1.0, beta = 0.75, gamma = 0.25   (tunable defaults)
+c0 is the seed vector. The centroid is recomputed from all effective labels at each update, so it is reproducible from built_from_max_event_id.
+First update at 10 effective labels with at least 3 positives; then after every 25 new effective labels.
+A new centroid becomes the routing vector from the next cycle, and percentile thresholds are recomputed under it (Section 7.2).
+7.5 Classifier Phase
+p = P(relevant | paper_embedding)
+Eligibility: at least 30 effective labels (50 preferred), at least 8 positives and 8 negatives. Retrain after every 25 new effective labels.
+Model: L2-regularized logistic regression, class_weight = balanced, C from {0.1, 0.3, 1.0} by inner cross-validation.
+Promotion guard (Phase 11): out-of-fold ROC-AUC at least 0.65 and at least the cosine-to-current-centroid AUC on the same labels plus 0.02.
+Routing in classifier mode: p ≥ p_high → HIGH; p ≤ p_low → LOW; otherwise BORDERLINE. Start with 0.70/0.30 (provisional) and calibrate with the Section 7.2 objective.
+Feedback is biased toward papers the gate already liked (digest items skew positive and discarded papers receive no feedback). Treat out-of-fold results on feedback data as optimistic and rely on the labelled test split for reported performance.
+7.6 Review Queue and Caps
+BORDERLINE papers are queued for review up to 15 per user per cycle, ordered by score (highest first, recall-oriented).
+Overflow papers are logged as DEFERRED_OVERFLOW, receive no label, and are not carried over. Undecided tasks expire after 3 days (REVIEW_EXPIRED) with no label.
+The digest is capped at 20 items per cycle; HIGH papers beyond the cap are DEFERRED_OVERFLOW and are not summarized.
+7.7 Where Summarization Belongs
+Summarization runs only for papers that will appear in the digest: HIGH papers within the cap and review-accepted papers. [P] Reasons: LOW papers are the majority and summarizing them wastes cost and latency (the basis of the LLM-call reduction result); the gate stays cheap, deterministic, and inspectable with no LLM inside the decision; and the summary prompt (abstract + user interests) explains why the paper matches rather than restating the abstract.
+7.8 Explanations
+Because logistic regression coefficients over 384 embedding dimensions are not human-readable, each decision is explained by the nearest liked/accepted and nearest disliked/rejected papers plus the score or probability, the thresholds used, and the vector/model version. [R]
+8. Evaluation Plan
+The evaluation must demonstrate not only that papers can be classified, but that gating, human review, and preference learning provide measurable value, with a statistically honest design for a small labelled set.
+=== LINE 815 ===
+8.1 Labelling Strategy and Splits
+Sampling frame: evaluation-window corpus papers excluding the reference sample.
+Strata are defined by the percentile of each paper’s seed-vector score relative to the reference sample:
+Stratum
+Reference-percentile band
+Labels
+Routing region (default levels)
+S1
+≥ P98
+100
+HIGH
+S2
+P90–P98
+120
+BORDERLINE
+S3
+P75–P90
+100
+LOW
+S4
+P50–P75
+80
+LOW
+S5
+< P50
+100
+LOW
+Label about 500 papers in total; record stratum and sampling_weight (stratum population / stratum sample size) for each.
+Targets: at least 100 relevant labels overall and at least 30 relevant labels in the test split. If short, label more in S1–S3 and update weights.
+Split within each stratum: 70% development (calibration, hyperparameters, simulated-feedback pool) and 30% test. The test split is frozen before any calibration and used only for final reporting.
+Primary binary mapping: relevant = 1; somewhat and not relevant = 0. Lenient sensitivity: relevant + somewhat = 1.
+BORDERLINE is a routing outcome, not ground truth. Evaluate whether BORDERLINE captures the somewhat papers by reporting its composition.
+Strata are defined using the seed vector, so evaluation of the cosine gate is partly circular. Weighting corrects for the sampling design, and the low-similarity strata are sampled randomly within their bands; state this limitation.
+8.2 Metrics and Estimation
+All headline numbers are weighted by sampling_weight and reported with 95% stratified bootstrap confidence intervals (1,000 resamples). Unweighted metrics on the enriched pool are secondary and labelled as such.
+Three-way gate operating points: (a) auto-deliver = HIGH only (precision/recall/F1 against relevant); (b) not-discarded = HIGH + BORDERLINE (recall = 1 − LOW miss rate); (c) with review = HIGH + oracle-accepted BORDERLINE (E6).
+Threshold-free comparison with binary scorers: PR-AUC and ROC-AUC; and precision/recall/F1 at matched delivered volume.
+Always report the BORDERLINE share and composition, and the LOW miss rate.
+8.3 Baselines
+ID
+Baseline
+Purpose
+B0
+Random routing at matched volume
+Lower bound.
+B1
+Keyword/TF-IDF cosine to the seed text
+Simple lexical baseline.
+B2
+Embedding cosine to the fixed seed vector (cold-start gate)
+The system before adaptation.
+B3
+Embedding cosine to the updated centroid
+Isolates centroid adaptation (E4).
+B4
+TF-IDF + logistic regression trained on the same feedback (arXiv-Sanity-style)
+Literature baseline from the proposal [P].
+B5
+Embedding logistic regression trained on user-only, reviewer-only, or combined feedback
+Signal ablation (E3).
+8.4 Simulated-Feedback Protocols
+Real pilot feedback is too small for learning curves, so offline experiments use the labelled development pool as an oracle. Simulated results are always labelled as simulated.
+Oracle: a simulated user likes a delivered paper if its primary label is relevant; a simulated reviewer accepts a borderline paper under the same rule. Optional noise sensitivity may be added.
+Protocol A (random): for n feedback points, sample n labelled development papers at random (stratified-random), train, evaluate on the test split.
+Protocol B (gate-selected): sample feedback the way the system would collect it — user signals from development papers routed HIGH, reviewer signals from papers routed BORDERLINE under the cold-start gate. E3 uses Protocol B. Sample sizes are capped by the size of each routing-region pool, and curves stop where a pool is exhausted.
+n values: 0, 10, 20, 30, 50, 75, 100, 150 (up to pool size). For n below the classifier eligibility rule, the system curve uses cosine-to-centroid; the switch point is marked on the plot.
+10 random seeds per point; report mean and confidence band.
+The CLI simulate-feedback command applies the same oracle to replay cycles, which also produces the demo snapshot.
+8.5 Experiments
+Experiment
+Question
+Design and Main Metrics
+E1: Gate Quality
+Does the three-way gate outperform simple baselines?
+Test split, weighted. HIGH precision/recall/F1, LOW miss rate, BORDERLINE share and composition, PR-AUC/ROC-AUC against B0–B2 and B4 at matched volume, with bootstrap CIs.
+E2: Learning Curves
+Does relevance filtering improve with feedback?
+Protocols A and B; PR-AUC and F1 vs n; 10 seeds; baselines B2 and B4 shown; classifier switch point marked.
+E3: Signal Ablation
+Do reviewer decisions add value?
+Protocol B; user-only vs reviewer-only vs combined (B5) at matched n; effect of the effective-label rule.
+E4: Centroid Update
+Does centroid adaptation help before the classifier exists?
+B2 (fixed seed vector) vs B3 (updated centroid) vs classifier at equal feedback budgets, thresholds recomputed per vector.
+E5: Efficiency
+Does gating reduce expensive LLM work?
+LLM-call reduction = 1 − summaries / papers scored, against summarize-everything; tokens and estimated cost; review workload and overflow per cycle over time; sensitivity to percentile levels. Run in replay and on pilot logs.
+E6: Human Review Value
+Does escalation improve decisions?
+On the BORDERLINE set: oracle review vs auto-accept vs auto-reject — precision/recall of the delivered set and review workload. On the pilot: reviewer decisions vs pilot_test labels where available.
+E7: Pilot
+Does the system help real users?
+=== LINE 907 ===
+Hypotheses and exclusions in Section 8.6; like rate per cycle, reviews per cycle, usefulness and summary-helpfulness ratings, triage time, interviews, per-user gate quality on pilot_test labels.
+E8: Summary Quality (optional)
+Are interest-framed summaries useful?
+Blinded ratings of about 20–30 summaries vs plain abstracts.
+=== LINE 911 ===
+8.6 Pilot Protocol (E7)
+Participants: 3–5 users including the developer; at least 7 consecutive daily cycles; users asked to react to at least 10 digest items per day and clear their review queue.
+Hypotheses stated in advance: H1 within each user, the digest like rate after vector/model activation is at least as high as before. H2 review burden (borderline tasks per cycle) does not increase after activation. H3 users rate the digest as useful for triage and the summaries as helpful (median at least 4 of 5).
+Analysis is descriptive and paired within user. With so few users, do not claim statistical significance; report limitations and any null results.
+Exclusion rules, fixed before analysis: users with fewer than 5 active days or fewer than 30 effective labels are excluded from H1/H2 (but kept for H3); outage days are excluded and logged; reactions before onboarding completion are excluded; developer data is reported separately.
+The reviewer and the end user are the same person; state this as a limitation.
+8.7 Data That Must Be Collected During Implementation
+All routing decisions with scores, thresholds, levels, and versions (including discards).
+Raw feedback events with source and timestamps; review timings and expiry.
+Model versions with cross-validation metrics and promotion outcomes; vector versions with activation dates.
+Summary token counts and cost.
+Labels with strata and weights; test-access log.
+Cycle mode and simulated-user flags.
+9. Agentic Workflow and State Model
+DISCOVER -> PREPROCESS -> EMBED -> SCORE -> ROUTE
+                                              |-- HIGH ---------> SUMMARIZE -> DELIVER -> REACT
+                                              |-- BORDERLINE --> PENDING_REVIEW
+                                              |        |-- ACCEPT ---> SUMMARIZE -> DELIVER -> REACT
+                                              |        |-- REJECT ---> LOG
+                                              |        |-- EXPIRE ---> LOG (no label)
+                                              |        `-- (queue overflow) -> DEFERRED_OVERFLOW
+                                              `-- LOW ----------> DISCARD / LOG
+(digest overflow of HIGH papers -> DEFERRED_OVERFLOW)
+9.1 Statuses and Transitions
+Papers are ingested and embedded globally; the per-user statuses below live on routing_decisions.
+Status
+Meaning
+Set by
+Next
+ROUTED_HIGH
+Gate decision: HIGH
+Relevance Agent
+SUMMARIZE_PENDING, or DEFERRED_OVERFLOW (digest cap)
+ROUTED_BORDERLINE
+Gate decision: BORDERLINE
+Relevance Agent
+PENDING_REVIEW, or DEFERRED_OVERFLOW (queue cap)
+DISCARDED
+LOW; logged with score (terminal)
+Relevance Agent
+—
+PENDING_REVIEW
+In the review queue
+Queue builder
+SUMMARIZE_PENDING; REVIEW_REJECTED; REVIEW_EXPIRED
+REVIEW_REJECTED
+Reviewer rejected (terminal)
+Reviewer
+—
+REVIEW_EXPIRED
+Not decided within 3 days (terminal, no label)
+Resume step
+—
+DEFERRED_OVERFLOW
+Exceeded review or digest cap (terminal, no label)
+Queue/digest builder
+—
+SUMMARIZE_PENDING
+Cleared the gate, awaiting summary (retried until success)
+Gate or reviewer
+SUMMARIZED
+SUMMARIZED
+Summary stored
+Summary Agent
+DELIVERED
+DELIVERED
+Included in a digest
+Digest builder
+REACTED
+REACTED
+User gave like/dislike
+User
+—
+State-transition tests (Phase 5/6) must reject illegal transitions, for example DISCARDED → SUMMARIZED.
+9.2 Automatic vs Human Decisions
+Decision
+Decision Maker
+Scoring method: threshold or classifier
+Automatic
+Thresholds recomputed for a new vector
+Automatic
+HIGH / BORDERLINE / LOW
+Automatic
+Review queue ordering, cap, overflow, expiry
+Automatic
+Whether to summarize
+Automatic consequence of routing
+When to update the vector or retrain
+Automatic batch trigger
+Whether to promote a new model
+Automatic promotion guard
+When a monitoring cycle runs
+Automatic scheduler
+Accept/reject borderline papers
+Human reviewer
+Like/dislike delivered papers
+Human end user
+Validation and onboarding labels; freezing the test split
+Human evaluator / pilot users
+9.3 Viva Explanation of “Agentic”
+The system is implemented as an explicit state machine rather than a general-purpose multi-agent framework. Its agentic behaviour arises from autonomous routing decisions: each paper is evaluated and independently routed to automatic processing, human review, or discard, with the reason recorded; uncertain cases are escalated to a human instead of guessed; and subsequent feedback changes the interest vector and model that drive future routing.
+10. Antigravity Development Workflow
+Antigravity should be used as an AI engineering teammate. Work on one bounded task at a time.
+YOU: give a small, explicit task
+  |
+  v
+ANTIGRAVITY: plan -> implement -> test -> report changes
+  |
+  v
+YOU REVIEW: correct -> commit | incorrect -> request a focused fix
+10.1 Recommended Task Style
+State exactly which module is being implemented.
+Provide the relevant design rules from this roadmap: for example the status table (Section 9.1), the schema (Section 6), and the parameters (Appendix A).
+Ask Antigravity to explain its plan before making broad changes.
+Tell it not to modify unrelated files and never to touch .env, data/, or the test split.
+Require tests for non-trivial logic.
+Inspect generated code and test output before committing.
+Use Git commits at meaningful milestones.
+11. Git and GitHub Workflow and Safety
+Create the .gitignore before the first commit. It must exclude at least:
+.env
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+data/
+*.parquet
+*.npy
+*.pkl
+*.joblib
+.DS_Store
+Commit only .env.example with placeholder values; real keys live in .env locally, in host environment variables, and in scheduler secrets.
+Do not blindly run git add .; run git status first and add reviewed files explicitly.
+Keep the repository private until Phase 14. If a secret is ever committed, rotate the key immediately; deleting the file is not enough because history keeps it.
+Optionally add a secret-scanning pre-commit hook.
+The labelled data may contain personal judgments of pilot users; keep it out of the public repository unless anonymized.
+Suggested milestone history:
+Initial project setup
+Add corpus ingestion, preprocessing, and embeddings
+Add database layer
+Add labelling tool, baselines, and calibration
+Add state machine and cold-start gate
+Add human review, digest, and feedback
+Add summarization
+Add live monitoring
+Add deployment and pilot launch
+Add interest-vector update
+Add classifier
+Add experiment suite
+Add final evaluation and demo
+12. Suggested Development Schedule
+Schedule for a build of about 28–30 days. Four tracks run in parallel: build, labelling, pilot, and writing.
+Days
+Build track
+Labelling / pilot track
+Writing track
+1–7
+Phases 0–3: setup, prototype, corpus + reference sample, database
+Labelling starts about Day 3 (about 60 per day)
+Reuse proposal text for introduction and related work
+8–14
+Phase 4 calibration, Phases 5–6: state machine, review, digest, feedback
+Labels and test split frozen by Day 14; recruit pilot users
+Draft system design and method sections
+15–20
+Phases 7–9: summaries, live monitoring, cold-start deployment
+Pilot-user onboarding labels; pilot launches by Day 20
+Draft implementation section
+21–25
+Phases 10–12 while the pilot runs: centroid (deploy about Day 21), classifier (when the guard passes, about Day 23+), offline experiments
+Pilot running; log activation dates
+Result placeholders only (no numbers)
+26–30
+Phases 13–14: final evaluation, demo, paper
+Pilot ends Day 27–28 (at least 7 cycles); survey and interviews
+Final results, discussion, limitations
+12.1 Rules if Time Becomes Limited
+If at Day 14 Phase 6 is not working, cut optional work first: embedding-model comparison, summary-quality study (E8), sophisticated scheduling (use a manual daily run), multi-interest vectors, the audit sample, and fancy UI (Streamlit is allowed).
+Never cut: validation data, the frozen test split, baselines, the human review loop, learning curves, the live arXiv demonstration, or the early pilot launch.
+If the pilot cannot launch by Day 20, run a shorter feasibility pilot, report E7 descriptively, and rely on Protocols A/B for E2–E4. State this plainly in the paper.
+If the classifier cannot be promoted on real pilot data, report that honestly and show the simulated learning curves as simulated.
+13. Risks and Mitigation
+Risk
+Mitigation
+Human review blocks the pipeline
+Persist review tasks, resume later, expire stale tasks.
+Pilot starts too late for real feedback
+Deploy cold-start version by Day 20; build learning components while the pilot runs.
+Thresholds invalid after the centroid changes or for a new user
+Percentile thresholds recomputed per vector from a fixed reference sample; per-user sanity check.
+Small or biased labelled set weakens E1–E3
+Stratified sampling with weights, at least 100 relevant labels, frozen test split, bootstrap CIs, lenient sensitivity analysis.
+Strata defined by the seed vector make cosine evaluation circular
+Weighted estimation, random sampling within bands, state the limitation.
+Too few real users for learning curves
+Protocols A and B with the oracle, clearly labelled as simulated.
+Conflicting or duplicate feedback
+Append-only events plus one explicit effective-label rule and tests.
+Feedback selection bias (digest skews positive; discards never labelled)
+Evaluate on the labelled test split, treat out-of-fold feedback metrics as optimistic; optional LOW audit sample.
+Logistic regression overfits small feedback data
+Strong regularization, class-balance guard, promotion guard against a cosine baseline.
+Embedding coefficients are not human-readable
+Explain with nearest liked/rejected papers and audit logs.
+Balanced class weights distort probabilities
+Calibrate classifier thresholds instead of trusting 0.5.
+Reviewer and user are the same person
+State as a limitation; keep sources separate in storage.
+Replay or simulated data contaminates pilot results
+Cycle mode and simulated-user flags; analysis filters by them.
+Docker/pgvector is difficult on Windows
+Isolate data access and temporarily use SQLite + NumPy; migrate before Phase 9.
+Hosted runtime cannot fit PyTorch or the full corpus
+Web service without PyTorch; embedding only in the worker; deployed database holds only the reference sample and live papers.
+Large raw dataset is expensive to process
+Stream-filter once to Parquet and scale gradually.
+LLM cost/rate limits
+Gate before summarization, cache outputs, cap digest size, retry failures.
+Percentile thresholds fix the routed share
+Report shares as a function of chosen levels with sensitivity analysis.
+Secret or data leaked to GitHub
+.gitignore before first commit, git status before adding, private repo, key rotation.
+Schedule overload in Weeks 2–3
+Parallel tracks, cut list (Section 12.1), Streamlit fallback.
+Too many AI coding tools cause confusion
+Use Antigravity as the primary coding assistant and GitHub as the source of truth.
+14. Final Demonstration Checklist
+Prepare a demo database snapshot (from simulated feedback and pilot data) so that retraining can be triggered live with one command. Run replay locally; show the deployed application separately.
+Show the filtered research corpus, the reference sample, and a user seed profile.
+Run a replay monitoring cycle (local).
+Show HIGH / BORDERLINE / LOW counts, the percentile thresholds, and the decision log.
+Open the human review queue and accept/reject borderline papers; show queue cap and overflow logging.
+Show that only gate-cleared papers receive summaries.
+Display the personalized research digest.
+Submit likes and dislikes; show the effective-label rule on a conflicting example.
+From the demo snapshot, trigger the interest-vector update and show thresholds recomputed.
+Trigger classifier retraining from the snapshot; show the promotion decision and model version change.
+Show routing differences on a fixed paper set before and after learning.
+Open the audit page and show discarded papers and their scores.
+Show evaluation tables (E1–E6) and learning curves, with simulated results labelled.
+Show pilot results (E7) with limitations.
+Run a live arXiv retrieval through the same pipeline.
+Demonstrate the deployed application and its scheduled worker log.
+15. Mapping Implementation to the Final ACM Paper
+Implementation Evidence
+Paper Section
+Problem, motivation, literature gap
+Introduction / Related Work
+Architecture, state machine, runtime split
+System Design / Architecture
+Database and implementation choices
+Implementation
+Embedding, percentile thresholds, gate, classifier, centroid, feedback rules
+Methodology
+Labelling design, splits, weighting, baselines, simulation protocols
+Experimental Methodology
+E1–E6 results (simulated results labelled)
+Results
+Pilot protocol, hypotheses, exclusions, E7 results
+Results / User Evaluation
+Trade-offs, limitations, failure cases, null results
+Discussion / Limitations
+Overall contribution
+Conclusion
+The final paper should be produced from actual implementation and experiment outputs. Do not invent or pre-write numerical results before the experiments are run.
+16. Immediate Next Steps
+Create the GitHub repository (private).
+Create the local project folder and Python virtual environment.
+Create .gitignore and .env.example first, then README, requirements.txt, and docs/decisions.md (copy Section 1.3).
+Open the project in Antigravity.
+Install only the packages required for the tiny prototype.
+Prepare approximately 200 papers for the first prototype.
+Implement title + abstract embeddings and the seed-profile embedding.
+Calculate cosine similarity.
+Produce HIGH / BORDERLINE / LOW output using temporary cut points.
+Inspect the top and bottom results.
+Commit the working prototype before moving to the next phase.
+Do not begin with the full database, web application, deployment, or the 50–100k corpus. The first technical proof point is the small embedding → similarity → three-way routing prototype. Start the labelling track as soon as Phase 3 is finished, not after the agent is built.
+Appendix A — Core Configuration to Keep Versioned
+All values are starting defaults [R] unless marked [P]. Keep them in config.py and snapshot them into cycles.config_snapshot.
+Parameter
+Default
+Notes
+arXiv categories
+cs.CL, cs.LG, cs.AI
+[P]
+Corpus size / date range
+50–100k [P]; bounded recent range
+Scale gradually from 5k.
+Embedding model / dimension / text
+all-MiniLM-L6-v2 / 384 / title + abstract, L2-normalized
+Reference sample
+5,000 random corpus papers, fixed seed
+Excluded from the labelling frame.
+Provisional percentile levels
+P_high = 98, P_low = 90
+Replaced by calibrated levels in Phase 4.
+Calibration objective
+HIGH precision ≥ 0.80; LOW miss rate ≤ 10% (aim 5%); P_low < P_high
+Development split, weighted.
+Classifier probability thresholds
+p_high = 0.70, p_low = 0.30 (provisional)
+Calibrate; record source.
+Rocchio coefficients
+alpha 1.0, beta 0.75, gamma 0.25
+Tunable.
+Centroid update trigger
+First at 10 effective labels (≥ 3 positives); then every 25 new
+Classifier eligibility / retrain batch
+≥ 30 effective labels (50 preferred), ≥ 8 positives and 8 negatives; every 25 new
+[P] 30–50 points.
+Classifier settings
+L2, class_weight balanced, C in {0.1, 0.3, 1.0} by inner CV; repeated stratified 5-fold OOF
+Promotion criteria
+OOF ROC-AUC ≥ 0.65 and ≥ cosine-to-centroid OOF AUC + 0.02
+Review queue cap / expiry
+15 per user per cycle, highest score first / 3 days
+Digest cap
+20 items per cycle
+Also caps summarization.
+Audit sample (optional)
+Off; if on, up to 3 LOW papers per cycle
+Labelling design
+About 500 labels in 5 strata (100/120/100/80/100); 70% dev / 30% test; ≥ 100 relevant, ≥ 30 in test
+=== LINE 1235 ===
+Section 8.1.
+Simulation settings
+n in {0, 10, 20, 30, 50, 75, 100, 150}; 10 seeds; 1,000 bootstrap resamples
+=== LINE 1238 ===
+Section 8.4.
+Pilot settings
+3–5 users; launch by Day 20; ≥ 7 daily cycles; about 40 onboarding labels per user (20 calibration / 20 pilot_test); ≥ 10 reactions per day requested
+=== LINE 1241 ===
+Section 8.6.
+Replay cycle window
+Weekly windows with as_of_date
+LLM model name and prompt version
+Recorded per summary
+Low temperature.

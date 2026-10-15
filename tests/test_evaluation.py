@@ -45,7 +45,10 @@ from research_monitor.evaluation.calibration import (
 from research_monitor.evaluation.labeling import (
     export_labels_to_csv,
     get_label_statistics,
+    get_labeled_paper_ids,
+    load_latest_labels,
     normalize_label,
+    normalize_paper_id,
     record_validation_label,
 )
 from research_monitor.evaluation.metrics import (
@@ -153,6 +156,121 @@ class TestLabeling:
         assert stats["test_relevant_count"] == 1
         assert stats["overall_shortfall"] == 98
         assert stats["test_shortfall"] == 29
+
+    def test_normalize_paper_id_preserves_and_recovers_trailing_zero(self):
+        # ArXiv ID from 2015+ (YYMM.NNNNN) where trailing zero was dropped by float parsing
+        assert normalize_paper_id("2411.1151") == "2411.11510"
+        assert normalize_paper_id("2411.11510") == "2411.11510"
+        assert normalize_paper_id("2412.10320") == "2412.10320"
+        assert normalize_paper_id("2412.1032") == "2412.10320"
+        # Non-arXiv or normal string
+        assert normalize_paper_id("test-paper-1") == "test-paper-1"
+        # Matches valid_pids if provided
+        assert normalize_paper_id("2411.1151", valid_pids={"2411.11510"}) == "2411.11510"
+
+    def test_queue_skips_labeled_paper_and_presents_unlabeled(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # 1. Existing label for p1
+            existing = [
+                {"user_id": "developer", "paper_id": "2411.11510", "label": "relevant", "stratum": "S1", "sampling_weight": 1.0, "split": "dev"}
+            ]
+            export_labels_to_csv(existing, output_dir=tmpdir)
+
+            # Sample has 3 papers: p1 (labeled), p2 (unlabeled), p3 (unlabeled)
+            sample_df = pd.DataFrame([
+                {"paper_id": "2411.11510", "title": "Paper 1", "stratum": "S1", "split": "dev"},
+                {"paper_id": "2412.02316", "title": "Paper 2", "stratum": "S1", "split": "dev"},
+                {"paper_id": "2412.10320", "title": "Paper 3", "stratum": "S2", "split": "test"},
+            ])
+
+            labeled_pids = get_labeled_paper_ids(session=None, user_id="developer", output_dir=tmpdir)
+            assert "2411.11510" in labeled_pids
+
+            sample_df["_norm_pid"] = sample_df["paper_id"].apply(normalize_paper_id)
+            unlabeled_df = sample_df[~sample_df["_norm_pid"].isin(labeled_pids)].copy()
+
+            # p1 is skipped, p2 and p3 are presented
+            assert len(unlabeled_df) == 2
+            assert "2411.11510" not in unlabeled_df["paper_id"].tolist()
+            assert unlabeled_df["paper_id"].tolist() == ["2412.02316", "2412.10320"]
+
+    def test_restarting_session_does_not_duplicate_labels(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Session 1: Label p1
+            rec1 = record_validation_label(
+                paper_id="2411.11510",
+                label="relevant",
+                stratum="S1",
+                sampling_weight=1.0,
+                split="dev",
+                user_id="developer",
+            )
+            export_labels_to_csv([rec1], output_dir=tmpdir)
+
+            # Restart session: load labels
+            df_restarted = load_latest_labels(output_dir=tmpdir)
+            assert len(df_restarted) == 1
+            assert df_restarted.iloc[0]["paper_id"] == "2411.11510"
+
+            # Session 2: Label p2
+            rec2 = record_validation_label(
+                paper_id="2412.02316",
+                label="not_relevant",
+                stratum="S1",
+                sampling_weight=1.0,
+                split="dev",
+                user_id="developer",
+            )
+            current_records = df_restarted.to_dict(orient="records")
+            current_records.append(rec2)
+            export_labels_to_csv(current_records, output_dir=tmpdir)
+
+            # Restart session again: load labels
+            df_restarted2 = load_latest_labels(output_dir=tmpdir)
+            assert len(df_restarted2) == 2
+
+            # Simulate saving duplicates or re-saving: verify no duplicate rows
+            export_labels_to_csv(current_records + [rec1], output_dir=tmpdir)
+            df_restarted3 = load_latest_labels(output_dir=tmpdir)
+            assert len(df_restarted3) == 2
+            stats = get_label_statistics(df_restarted3)
+            assert stats["total_count"] == 2
+
+    def test_multi_user_queue_isolation_in_csv(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            rec_dev = record_validation_label(
+                paper_id="2411.11510",
+                label="relevant",
+                stratum="S1",
+                sampling_weight=1.0,
+                split="dev",
+                user_id="developer",
+            )
+            export_labels_to_csv([rec_dev], output_dir=tmpdir)
+
+            # For developer, paper is labeled
+            dev_pids = get_labeled_paper_ids(session=None, user_id="developer", output_dir=tmpdir)
+            assert "2411.11510" in dev_pids
+
+            # For reviewer_2, paper is NOT labeled
+            rev2_pids = get_labeled_paper_ids(session=None, user_id="reviewer_2", output_dir=tmpdir)
+            assert "2411.11510" not in rev2_pids
+
+            # Reviewer 2 labels the same paper with their own opinion
+            rec_rev2 = record_validation_label(
+                paper_id="2411.11510",
+                label="not_relevant",
+                stratum="S1",
+                sampling_weight=1.0,
+                split="dev",
+                user_id="reviewer_2",
+            )
+            export_labels_to_csv([rec_dev, rec_rev2], output_dir=tmpdir)
+
+            latest_df = load_latest_labels(output_dir=tmpdir)
+            assert len(latest_df) == 2
+            assert set(latest_df["user_id"]) == {"developer", "reviewer_2"}
+
 
 
 # =========================================================================
@@ -592,4 +710,51 @@ class TestValidationLabelModel:
             session.commit()
 
         session.rollback()
+        session.close()
+
+    def test_record_validation_label_session_persistence(self):
+        """Verify record_validation_label saves and updates in database session."""
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(bind=engine)
+        Session = sessionmaker(bind=engine)
+        session = Session()
+
+        # 1. Insert initial label
+        rec1 = record_validation_label(
+            paper_id="2401.12345",
+            label="relevant",
+            stratum="S3",
+            sampling_weight=2.0,
+            split="dev",
+            notes="Initial label",
+            session=session,
+            user_id="researcher_1",
+        )
+        assert rec1["label"] == "relevant"
+
+        retrieved = session.query(ValidationLabel).filter_by(paper_id="2401.12345", user_id="researcher_1").first()
+        assert retrieved is not None
+        assert retrieved.label == "relevant"
+        assert retrieved.sampling_stratum == "S3"
+        assert retrieved.stratum == "S3"
+        assert retrieved.notes == "Initial label"
+
+        # 2. Update existing label for same user + paper
+        rec2 = record_validation_label(
+            paper_id="2401.12345",
+            label="somewhat",
+            stratum="S3",
+            sampling_weight=2.0,
+            split="dev",
+            notes="Updated label",
+            session=session,
+            user_id="researcher_1",
+        )
+        assert rec2["label"] == "somewhat"
+
+        all_matches = session.query(ValidationLabel).filter_by(paper_id="2401.12345", user_id="researcher_1").all()
+        assert len(all_matches) == 1
+        assert all_matches[0].label == "somewhat"
+        assert all_matches[0].notes == "Updated label"
+
         session.close()

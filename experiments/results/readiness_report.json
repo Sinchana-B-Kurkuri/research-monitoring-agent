@@ -1,0 +1,76 @@
+{
+  "tier": "EVALUATION_PARTIALLY_AVAILABLE",
+  "can_freeze_final_numbers": false,
+  "explanation": "Phase 13 evaluation infrastructure is fully implemented, verified, and testable. However, real pilot data collection and human paper labeling are still in progress. Final numerical results cannot be frozen until all criteria in Section 8 are satisfied.",
+  "missing_prerequisites": [
+    "Pilot participants: 1 genuine participant(s) found (target 3-5 users per Roadmap Section 8.6; 0 currently eligible for H1/H2 before/after evaluation)",
+    "Pilot consecutive daily live streak: 1/7 days (minimum 7 consecutive daily live cycles required; 3 total cycles recorded across 2 active days, but only 1 is live)",
+    "Live pilot cycles: 1 recorded for genuine participants (minimum 7 live cycles required; 2 replay cycles excluded from live count)",
+    "End-of-pilot surveys: 0 responses collected (surveys required for Hypothesis H3)",
+    "Summary token telemetry: No summary token records in database (cost calculations will report telemetry missing)"
+  ],
+  "total_users_with_records": 3,
+  "genuine_pilot_participants_count": 1,
+  "h1_h2_eligible_users_count": 0,
+  "developer_users_count": 1,
+  "simulated_users_count": 1,
+  "total_recorded_cycles": 5,
+  "genuine_recorded_cycles": 3,
+  "genuine_live_cycles": 1,
+  "replay_cycles_count": 4,
+  "distinct_active_calendar_days": 2,
+  "consecutive_live_calendar_days": 1,
+  "active_users_count": 1,
+  "consecutive_calendar_days": 1,
+  "live_cycles_count": 1,
+  "validation_labels_total": 171,
+  "validation_labels_dev": 121,
+  "validation_labels_test": 50,
+  "surveys_count": 0,
+  "has_token_telemetry": false,
+  "checklists": {
+    "labels": {
+      "total_labels": 171,
+      "relevant_labels": 103,
+      "test_relevant_labels": 33,
+      "target_overall_met": true,
+      "target_test_met": true,
+      "overall_shortfall": 0,
+      "test_shortfall": 0
+    },
+    "pilot": {
+      "total_users_with_records": 3,
+      "genuine_pilot_participants_count": 1,
+      "target_genuine_participants": 3,
+      "h1_h2_eligible_users_count": 0,
+      "developer_users_count": 1,
+      "simulated_users_count": 1,
+      "total_recorded_cycles": 5,
+      "genuine_recorded_cycles": 3,
+      "genuine_live_cycles": 1,
+      "genuine_replay_cycles": 2,
+      "replay_cycles_count": 4,
+      "distinct_active_calendar_days": 2,
+      "distinct_live_calendar_days": 1,
+      "consecutive_live_calendar_days": 1,
+      "target_live_streak_days": 7,
+      "surveys_collected": 0,
+      "user_eligibility_details": {
+        "phase5_verify": {
+          "name": "Phase 5 Verification",
+          "total_cycles": 3,
+          "live_cycles": 1,
+          "replay_cycles": 2,
+          "active_calendar_days": 2,
+          "effective_labels": 0,
+          "h1_h2_eligible": false,
+          "exclusion_reason": "insufficient_active_days (2 < 5); insufficient_effective_labels (0 < 30)"
+        }
+      }
+    },
+    "telemetry": {
+      "token_telemetry_present": false,
+      "surveys_present": false
+    }
+  }
+}

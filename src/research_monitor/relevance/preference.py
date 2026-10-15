@@ -152,7 +152,7 @@ def compute_rocchio_centroid(
     # 3. Negative centroid term (omitted when empty)
     neg_term = np.zeros(384, dtype=np.float32)
     valid_neg = []
-    if negative_embeddings:
+    if negative_embeddings is not None and len(negative_embeddings) > 0:
         for n in negative_embeddings:
             nv = np.asarray(n, dtype=np.float32).ravel()
             if nv.size == 384 and np.all(np.isfinite(nv)):

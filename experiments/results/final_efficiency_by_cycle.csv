@@ -1,0 +1,5 @@
+cycle_id,as_of_date,user_id,is_developer,mode,papers_scored,routed_high,routed_borderline,routed_low,summaries_generated,review_tasks_queued,review_tasks_decided,review_tasks_expired,review_overflow,digest_overflow,llm_call_reduction,tokens_in,tokens_out,cost_usd
+2,2026-10-11,phase5_verify,False,replay,50,3,1,46,0,0,0,0,0,0,1.0,,,
+5,2024-12-15,simulated_researcher,False,replay,40,20,15,5,0,0,0,0,0,0,1.0,,,
+3,2026-10-11,phase5_verify,False,replay,50,1,4,45,0,0,0,0,0,0,1.0,,,
+4,2026-10-12,phase5_verify,False,live,20,0,2,18,0,2,0,0,0,0,1.0,,,

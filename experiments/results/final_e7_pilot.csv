@@ -1,0 +1,2 @@
+user_id,is_developer,is_h1_h2_eligible,exclusion_reason,active_days,effective_labels,h1_status,h1_supported,like_rate_pre,like_rate_post,h2_status,h2_supported,review_burden_pre,review_burden_post,usefulness_score,summary_helpfulness_score,triage_time_minutes
+phase5_verify,False,False,insufficient_active_days (2 < 5); insufficient_effective_labels (0 < 30),2,0,EXCLUDED_SECTION_8_6_NO_ACTIVATION,,,,EXCLUDED_SECTION_8_6_NO_ACTIVATION,,,,,,
