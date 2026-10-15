@@ -1,9 +1,18 @@
 """
 relevance
 ~~~~~~~~~
-Phase 5 Relevance Agent and Explicit State Machine.
+Phase 5, 10, and 11 Relevance Agent, Preference Memory, and Classifier.
 """
 
+from .classifier import (
+    ClassifierEligibility,
+    ClassifierTrainingResult,
+    DecisionExplanation,
+    calibrate_classifier_thresholds,
+    check_classifier_eligibility,
+    find_nearest_feedback_papers,
+    train_and_evaluate_classifier,
+)
 from .pipeline import (
     discover_stage,
     embed_stage,
@@ -49,4 +58,11 @@ __all__ = [
     "VectorUpdateEligibility",
     "VectorUpdateResult",
     "get_user_seed_embedding",
+    "check_classifier_eligibility",
+    "train_and_evaluate_classifier",
+    "calibrate_classifier_thresholds",
+    "find_nearest_feedback_papers",
+    "ClassifierEligibility",
+    "ClassifierTrainingResult",
+    "DecisionExplanation",
 ]

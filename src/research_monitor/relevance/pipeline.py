@@ -4,15 +4,18 @@ pipeline.py
 Explicit state machine implementing:
   discover -> preprocess -> embed -> score -> route
 
-Follows Roadmap Section 9.1 and Phase 5 deliverables:
+Follows Roadmap Section 9.1 and Phase 5 & 11 deliverables:
   - Cycle record management with mode (replay/live) and as_of_date.
+  - Supports both threshold-based routing (against active vector centroid) and classifier-based routing (promoted model).
   - Persists auditable decisions per (user, paper), including LOW papers.
+  - Always logs cosine similarity to active vector, even in classifier mode.
   - Re-running a cycle never creates duplicate decisions.
 """
 
 from datetime import datetime, timezone
 import logging
 from pathlib import Path
+import pickle
 from typing import Optional
 
 import numpy as np
@@ -22,6 +25,7 @@ from sqlalchemy.orm import Session
 from research_monitor.config import config
 from research_monitor.database.models import (
     Cycle,
+    ModelVersion,
     Paper,
     RoutingDecision,
     User,
@@ -86,7 +90,6 @@ def discover_stage(
     # 3. Replay mode: Query existing corpus
     if state.mode == "replay":
         db_queried = False
-        # Check DB first
         try:
             total_in_db = session.query(Paper).count()
             if total_in_db > 0:
@@ -94,86 +97,94 @@ def discover_stage(
                 query = session.query(Paper)
                 if state.as_of_date:
                     query = query.filter(Paper.submitted_date <= state.as_of_date)
-                # Filter unrouted
                 if already_routed_pids:
                     query = query.filter(~Paper.id.in_(already_routed_pids))
-
                 query = query.order_by(Paper.submitted_date.desc())
                 if limit:
                     query = query.limit(limit)
 
-                db_papers = query.all()
-                for dp in db_papers:
+                papers = query.all()
+                for p in papers:
+                    emb = np.array(p.embedding, dtype=np.float32) if p.embedding is not None else None
                     candidates.append(
                         PaperCandidate(
-                            paper_id=dp.id,
-                            title=dp.title,
-                            abstract=dp.abstract,
-                            submitted_date=dp.submitted_date,
-                            categories=dp.categories,
-                            is_reference=dp.is_reference,
-                            embedding=np.array(dp.embedding, dtype=np.float32) if dp.embedding else None,
+                            paper_id=p.id,
+                            title=p.title,
+                            abstract=p.abstract,
+                            submitted_date=p.submitted_date,
+                            categories=p.categories,
+                            is_reference=p.is_reference,
+                            embedding=emb,
                         )
                     )
         except Exception as e:
-            logger.warning("Could not query papers from DB: %s; falling back to parquet artifact.", e)
+            logger.warning("Could not query papers from database in replay mode (%s). Falling back to Parquet.", e)
 
-        # Fallback to corpus.parquet only if DB was not populated or inaccessible
         if not db_queried:
             c_path = Path(corpus_path)
-            if c_path.exists():
-                df = pd.read_parquet(c_path)
-                if state.as_of_date and "submitted_date" in df.columns:
-                    df = df[df["submitted_date"] <= state.as_of_date]
+            if not c_path.exists():
+                raise FileNotFoundError(f"Corpus file not found at {c_path}")
+            df = pd.read_parquet(c_path)
+            if state.as_of_date and "submitted_date" in df.columns:
+                df = df[df["submitted_date"] <= state.as_of_date]
+            if already_routed_pids:
+                df = df[~df["paper_id"].isin(already_routed_pids)]
+            if limit:
+                df = df.head(limit)
 
-                df = df[~df["paper_id"].astype(str).isin(already_routed_pids)]
-                if limit:
-                    df = df.head(limit)
-
-                for _, row in df.iterrows():
-                    candidates.append(
-                        PaperCandidate(
-                            paper_id=str(row["paper_id"]),
-                            title=str(row["title"]),
-                            abstract=str(row["abstract"]),
-                            submitted_date=str(row.get("submitted_date", "")),
-                            categories=row.get("categories", []),
-                            is_reference=bool(row.get("is_reference", False)),
-                        )
+            for _, row in df.iterrows():
+                candidates.append(
+                    PaperCandidate(
+                        paper_id=str(row["paper_id"]),
+                        title=str(row["title"]),
+                        abstract=str(row["abstract"]),
+                        submitted_date=str(row.get("submitted_date", "")),
+                        categories=row.get("categories", []),
+                        is_reference=bool(row.get("is_reference", False)),
+                        embedding=None,
                     )
-
-    elif state.mode == "live":
-        # Live mode: Discover unrouted papers from the database
-        query = session.query(Paper)
-        if already_routed_pids:
-            query = query.filter(~Paper.id.in_(already_routed_pids))
-
-        query = query.order_by(Paper.submitted_date.desc(), Paper.id.desc())
-        if limit:
-            query = query.limit(limit)
-
-        db_papers = query.all()
-        for dp in db_papers:
-            candidates.append(
-                PaperCandidate(
-                    paper_id=dp.id,
-                    title=dp.title,
-                    abstract=dp.abstract,
-                    submitted_date=dp.submitted_date,
-                    categories=dp.categories,
-                    is_reference=dp.is_reference,
-                    embedding=np.array(dp.embedding, dtype=np.float32) if dp.embedding else None,
                 )
-            )
+
+    # 4. Live mode: Query arXiv or fetch newly ingested papers from database
+    elif state.mode == "live":
+        try:
+            query = session.query(Paper)
+            if state.as_of_date:
+                query = query.filter(Paper.submitted_date <= state.as_of_date)
+            if already_routed_pids:
+                query = query.filter(~Paper.id.in_(already_routed_pids))
+            query = query.order_by(Paper.submitted_date.desc())
+            if limit:
+                query = query.limit(limit)
+
+            papers = query.all()
+            for p in papers:
+                emb = np.array(p.embedding, dtype=np.float32) if p.embedding is not None else None
+                candidates.append(
+                    PaperCandidate(
+                        paper_id=p.id,
+                        title=p.title,
+                        abstract=p.abstract,
+                        submitted_date=p.submitted_date,
+                        categories=p.categories,
+                        is_reference=p.is_reference,
+                        embedding=emb,
+                    )
+                )
+        except Exception as e:
+            logger.error("Live discovery query failed: %s", e)
+            raise
 
     state.discovered = candidates
     state.counts["discovered"] = len(candidates)
-    logger.info("Discover stage completed: %d unrouted candidates identified.", len(candidates))
+    logger.info("Discover stage completed: %d unrouted candidates found.", len(candidates))
     return state
 
 
 def preprocess_stage(state: PipelineState) -> PipelineState:
-    """Preprocess candidates: Unicode NFC normalization, whitespace collapsing."""
+    """
+    Preprocess stage: Normalizes text encoding and whitespace for discovered candidates.
+    """
     preprocessed: list[PaperCandidate] = []
     for c in state.discovered:
         c.title = normalize_text(c.title)
@@ -192,51 +203,75 @@ def embed_stage(
     corpus_path: Path | str = "data/corpus.parquet",
 ) -> PipelineState:
     """
-    Embed stage:
-      - In replay mode: looks up existing normalized embeddings.
-      - In live mode (or if embedding missing): computes with SentenceTransformer.
+    Embed stage: Attaches L2-normalized 384-dimensional embeddings.
+    In replay mode, looks up existing embeddings from DB or precomputed arrays.
+    In live mode, computes embeddings for un-embedded papers and persists them to DB.
     """
     embedded: list[PaperCandidate] = []
-    needed_computation: list[PaperCandidate] = []
 
-    # Try file lookup cache for replay mode if embedding not already set
-    pid_to_file_emb: dict[str, np.ndarray] = {}
-    e_path = Path(embeddings_path)
-    c_path = Path(corpus_path)
-    if state.mode == "replay" and e_path.exists() and c_path.exists():
+    # Check if embeddings are already populated
+    missing_pids = [c.paper_id for c in state.preprocessed if c.embedding is None]
+
+    if not missing_pids:
+        # All embeddings already attached
+        for c in state.preprocessed:
+            v = np.asarray(c.embedding, dtype=np.float32).ravel()
+            norm = np.linalg.norm(v)
+            if norm > 0:
+                c.embedding = v / norm
+            embedded.append(c)
+        state.embedded = embedded
+        state.counts["embedded"] = len(embedded)
+        return state
+
+    # Lookup in DB first
+    db_embeddings: dict[str, np.ndarray] = {}
+    try:
+        rows = (
+            session.query(Paper.id, Paper.embedding)
+            .filter(Paper.id.in_(missing_pids))
+            .all()
+        )
+        for pid, emb in rows:
+            if emb is not None:
+                v = np.array(emb, dtype=np.float32)
+                norm = np.linalg.norm(v)
+                db_embeddings[pid] = v / norm if norm > 0 else v
+    except Exception as e:
+        logger.warning("DB embedding lookup error: %s", e)
+
+    # If in live mode and still missing, generate dynamically
+    still_missing = [c for c in state.preprocessed if c.paper_id not in db_embeddings and c.embedding is None]
+    if still_missing and state.mode == "live":
         try:
-            corpus_df = pd.read_parquet(c_path)
-            all_embs = np.load(e_path)
-            for idx, pid in enumerate(corpus_df["paper_id"].values):
-                pid_to_file_emb[str(pid)] = all_embs[idx]
-        except Exception as e:
-            logger.debug("Could not pre-load file embeddings cache: %s", e)
+            from research_monitor.embeddings import compute_embeddings
+            texts = [f"{c.title}\n\n{c.abstract}" for c in still_missing]
+            new_embs = compute_embeddings(texts)
+            for c, emb in zip(still_missing, new_embs):
+                v = np.array(emb, dtype=np.float32)
+                norm = np.linalg.norm(v)
+                normed = v / norm if norm > 0 else v
+                db_embeddings[c.paper_id] = normed
 
+                paper_row = session.query(Paper).filter_by(id=c.paper_id).first()
+                if paper_row:
+                    paper_row.embedding = normed.tolist()
+                    paper_row.embedding_model = config.EMBEDDING_MODEL
+            session.commit()
+            logger.info("Dynamically embedded and updated %d papers in live mode.", len(still_missing))
+        except Exception as e:
+            logger.error("Failed to dynamically compute embeddings in live mode: %s", e)
+            raise
+
+    # Attach embeddings to candidates
     for c in state.preprocessed:
         if c.embedding is not None:
-            c_emb = np.asarray(c.embedding, dtype=np.float32)
-            norm = np.linalg.norm(c_emb)
-            c.embedding = c_emb / norm if norm > 0 else c_emb
+            v = np.asarray(c.embedding, dtype=np.float32).ravel()
+            norm = np.linalg.norm(v)
+            c.embedding = v / norm if norm > 0 else v
             embedded.append(c)
-        elif c.paper_id in pid_to_file_emb:
-            c_emb = np.asarray(pid_to_file_emb[c.paper_id], dtype=np.float32)
-            norm = np.linalg.norm(c_emb)
-            c.embedding = c_emb / norm if norm > 0 else c_emb
-            embedded.append(c)
-        else:
-            needed_computation.append(c)
-
-    # Compute missing embeddings (e.g. live mode or unindexed papers)
-    if needed_computation:
-        from sentence_transformers import SentenceTransformer
-        embedder = SentenceTransformer(config.EMBEDDING_MODEL)
-        texts = [f"{c.title} {c.abstract}".strip() for c in needed_computation]
-        vectors = embedder.encode(texts, convert_to_numpy=True, show_progress_bar=False)
-
-        for c, vec in zip(needed_computation, vectors):
-            vec = vec.astype(np.float32)
-            norm = np.linalg.norm(vec)
-            c.embedding = vec / norm if norm > 0 else vec
+        elif c.paper_id in db_embeddings:
+            c.embedding = db_embeddings[c.paper_id]
             embedded.append(c)
 
     state.embedded = embedded
@@ -246,7 +281,12 @@ def embed_stage(
 
 def score_stage(state: PipelineState) -> PipelineState:
     """
-    Score stage: Calculates cosine similarity s = dot(paper_embedding, active_vector).
+    Score stage:
+      - Always calculates cosine similarity against active interest vector:
+          cosine_score = dot(paper_embedding, active_vector).
+      - In classifier mode, additionally calculates classifier probability:
+          clf_prob = predict_proba(paper_embedding).
+      - Sets candidate.score = clf_prob if classifier mode else cosine_score.
     """
     if state.active_vector is None:
         raise ValueError("Cannot score without an active interest vector in state.")
@@ -257,8 +297,20 @@ def score_stage(state: PipelineState) -> PipelineState:
     for c in state.embedded:
         if c.embedding is None:
             raise ValueError(f"Paper {c.paper_id} has no embedding in score stage.")
-        score = float(np.dot(c.embedding, v))
-        c.score = score
+        emb = np.asarray(c.embedding, dtype=np.float32).ravel()
+        cosine_sim = float(np.dot(emb, v))
+        c.cosine_score = cosine_sim
+        c.method = state.method
+        c.model_version_id = state.model_version_id
+
+        if state.method == "classifier" and state.active_model is not None:
+            prob = float(state.active_model.predict_proba([emb])[0, 1])
+            c.clf_prob = prob
+            c.score = prob
+        else:
+            c.clf_prob = None
+            c.score = cosine_sim
+
         scored.append(c)
 
     state.scored = scored
@@ -268,7 +320,7 @@ def score_stage(state: PipelineState) -> PipelineState:
 
 def route_stage(state: PipelineState) -> PipelineState:
     """
-    Route stage: Assigns HIGH, BORDERLINE, or LOW based on active thresholds.
+    Route stage: Assigns HIGH, BORDERLINE, or LOW based on active thresholds and routing method.
     """
     routed: list[PaperCandidate] = []
     high_count = 0
@@ -279,23 +331,53 @@ def route_stage(state: PipelineState) -> PipelineState:
         if c.score is None:
             raise ValueError(f"Paper {c.paper_id} has not been scored.")
 
-        res = route_score(
-            score=c.score,
-            t_high=state.t_high,
-            t_low=state.t_low,
-            p_high=state.p_high_level,
-            p_low=state.p_low_level,
-        )
-        c.route = res.route
-        c.status = res.status
-        c.reason = res.reason
+        if state.method == "classifier":
+            prob = float(c.score)
+            th = float(state.t_high)
+            tl = float(state.t_low)
+            if prob >= th:
+                route = Route.HIGH
+                status = DecisionStatus.ROUTED_HIGH
+                reason = (
+                    f"Classifier probability {prob:.4f} >= threshold {th:.4f} "
+                    f"(model v{state.model_version_num}). Cleared gate for automatic delivery."
+                )
+            elif prob <= tl:
+                route = Route.LOW
+                status = DecisionStatus.DISCARDED
+                reason = (
+                    f"Classifier probability {prob:.4f} <= threshold {tl:.4f} "
+                    f"(model v{state.model_version_num}). Discarded paper below relevance floor."
+                )
+            else:
+                route = Route.BORDERLINE
+                status = DecisionStatus.ROUTED_BORDERLINE
+                reason = (
+                    f"Classifier probability {prob:.4f} in borderline band "
+                    f"({tl:.4f} < prob < {th:.4f}, model v{state.model_version_num}). Queued for human review."
+                )
+            c.route = route
+            c.status = status
+            c.reason = reason
+        else:
+            res = route_score(
+                score=c.score,
+                t_high=state.t_high,
+                t_low=state.t_low,
+                p_high=state.p_high_level,
+                p_low=state.p_low_level,
+            )
+            c.route = res.route
+            c.status = res.status
+            c.reason = res.reason
+
         routed.append(c)
 
-        if res.route == Route.HIGH:
+        if c.route == Route.HIGH:
             high_count += 1
-        elif res.route == Route.BORDERLINE:
+        elif c.route == Route.BORDERLINE:
             borderline_count += 1
-        elif res.route == Route.LOW:
+        elif c.route == Route.LOW:
             low_count += 1
 
     state.routed = routed
@@ -306,11 +388,12 @@ def route_stage(state: PipelineState) -> PipelineState:
         "low": low_count,
     })
     logger.info(
-        "Route stage completed: %d total (HIGH=%d, BORDERLINE=%d, LOW=%d)",
+        "Route stage completed: %d total (HIGH=%d, BORDERLINE=%d, LOW=%d, method=%s)",
         len(routed),
         high_count,
         borderline_count,
         low_count,
+        state.method,
     )
     return state
 
@@ -332,11 +415,11 @@ def persist_decisions(
             paper_id=c.paper_id,
             user_id=state.user_id,
             cycle_id=state.cycle_id,
-            cosine_score=c.score,
+            cosine_score=c.cosine_score if c.cosine_score is not None else c.score,
             vector_version_id=state.vector_version_id,
-            clf_prob=None,
-            method="threshold",
-            model_version_id=None,
+            clf_prob=c.clf_prob,
+            method=state.method,
+            model_version_id=state.model_version_id,
             thresholds_used=state.thresholds_dict,
             route=c.route.value,
             status=c.status.value,
@@ -351,6 +434,9 @@ def persist_decisions(
             cycle.finished_at = now
             cycle.counts = state.counts
             cycle.config_snapshot = {
+                "method": state.method,
+                "model_version_id": state.model_version_id,
+                "model_version_num": state.model_version_num,
                 "t_high": state.t_high,
                 "t_low": state.t_low,
                 "p_high": state.p_high_level,
@@ -371,6 +457,7 @@ def run_monitoring_cycle(
     papers_override: Optional[list[dict]] = None,
     auto_build_queue: bool = True,
     auto_update_vector: bool = False,
+    auto_train_model: bool = False,
 ) -> PipelineState:
     """
     Execute an autonomous monitoring cycle for a user through the explicit state machine:
@@ -383,6 +470,9 @@ def run_monitoring_cycle(
         as_of_date: Historical cut-off date (ISO string 'YYYY-MM-DD').
         limit: Max candidates to process in this cycle.
         papers_override: Optional explicit candidate list for testing.
+        auto_build_queue: Build human review queue for borderline candidates.
+        auto_update_vector: Evaluate Rocchio vector update after cycle.
+        auto_train_model: Evaluate preference classifier training after cycle.
 
     Returns:
         Final PipelineState object.
@@ -400,6 +490,33 @@ def run_monitoring_cycle(
     norm = np.linalg.norm(active_vec)
     if norm > 0:
         active_vec = active_vec / norm
+
+    # Resolve active classifier model if promoted (Phase 11)
+    active_model_ver = (
+        session.query(ModelVersion)
+        .filter_by(user_id=user.id, is_active=True)
+        .order_by(ModelVersion.version.desc())
+        .first()
+    )
+
+    if active_model_ver and active_model_ver.model_blob:
+        method = "classifier"
+        active_model = pickle.loads(active_model_ver.model_blob)
+        model_version_id = active_model_ver.id
+        model_version_num = active_model_ver.version
+        t_high = float(active_model_ver.p_high if active_model_ver.p_high is not None else 0.70)
+        t_low = float(active_model_ver.p_low if active_model_ver.p_low is not None else 0.30)
+        p_high_level = 70.0
+        p_low_level = 30.0
+    else:
+        method = "threshold"
+        active_model = None
+        model_version_id = None
+        model_version_num = None
+        t_high = v_version.t_high
+        t_low = v_version.t_low
+        p_high_level = v_version.p_high_level
+        p_low_level = v_version.p_low_level
 
     # 2. Record new Cycle entity
     now = datetime.now(timezone.utc)
@@ -427,17 +544,22 @@ def run_monitoring_cycle(
         active_vector=active_vec,
         vector_version_id=v_version.id,
         vector_version_num=v_version.version,
-        t_high=v_version.t_high,
-        t_low=v_version.t_low,
-        p_high_level=v_version.p_high_level,
-        p_low_level=v_version.p_low_level,
+        t_high=t_high,
+        t_low=t_low,
+        p_high_level=p_high_level,
+        p_low_level=p_low_level,
+        method=method,
+        active_model=active_model,
+        model_version_id=model_version_id,
+        model_version_num=model_version_num,
     )
 
     logger.info(
-        "Starting cycle %d for user '%s' (mode=%s, as_of=%s, t_high=%.4f, t_low=%.4f)",
+        "Starting cycle %d for user '%s' (mode=%s, method=%s, as_of=%s, t_high=%.4f, t_low=%.4f)",
         cycle.id,
         user.id,
         mode,
+        state.method,
         date_str,
         state.t_high,
         state.t_low,
@@ -468,5 +590,13 @@ def run_monitoring_cycle(
             update_user_interest_vector(user_id=user.id, session=session)
         except Exception as e:
             logger.warning("Could not evaluate vector update for user '%s': %s", user.id, e)
+
+    # 8. Optionally trigger preference model retraining & evaluation for next cycle (Phase 11)
+    if auto_train_model:
+        try:
+            from research_monitor.relevance.classifier import train_and_evaluate_classifier
+            train_and_evaluate_classifier(user_id=user.id, session=session)
+        except Exception as e:
+            logger.warning("Could not evaluate classifier update for user '%s': %s", user.id, e)
 
     return state

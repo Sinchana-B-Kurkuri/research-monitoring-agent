@@ -1,7 +1,7 @@
 """
 state.py
 ~~~~~~~~
-Pipeline state object, candidate representation, and state-machine statuses (Phase 5).
+Pipeline state object, candidate representation, and state-machine statuses (Phases 5 & 11).
 
 Follows Roadmap Section 9.1:
   - Gate decisions:
@@ -50,6 +50,10 @@ class PaperCandidate:
     is_reference: bool = False
     embedding: Optional[np.ndarray] = None
     score: Optional[float] = None
+    cosine_score: Optional[float] = None
+    clf_prob: Optional[float] = None
+    method: str = "threshold"
+    model_version_id: Optional[int] = None
     route: Optional[Route] = None
     status: Optional[DecisionStatus] = None
     reason: Optional[str] = None
@@ -75,6 +79,12 @@ class PipelineState:
     t_low: float = 0.0
     p_high_level: float = 98.0
     p_low_level: float = 90.0
+
+    # Phase 11 Classifier routing state
+    method: str = "threshold"  # 'threshold' or 'classifier'
+    active_model: Optional[Any] = None
+    model_version_id: Optional[int] = None
+    model_version_num: Optional[int] = None
 
     # Node progression containers
     discovered: list[PaperCandidate] = field(default_factory=list)

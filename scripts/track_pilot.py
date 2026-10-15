@@ -36,6 +36,7 @@ from research_monitor.database.models import (
     Digest,
     DigestItem,
     FeedbackEvent,
+    ModelVersion,
     ReviewTask,
     RoutingDecision,
     User,
@@ -78,6 +79,14 @@ def inspect_user_pilot_progress(user: User, session) -> dict:
     """
     # 1. Vector version
     v_active = get_active_vector_version(user_id=user.id, session=session)
+
+    # 1b. Active classifier model (Phase 11)
+    v_active_model = (
+        session.query(ModelVersion)
+        .filter_by(user_id=user.id, is_active=True)
+        .order_by(ModelVersion.version.desc())
+        .first()
+    )
 
     # 2. Cycles
     cycles = (
@@ -178,6 +187,12 @@ def inspect_user_pilot_progress(user: User, session) -> dict:
             "t_high": v_active.t_high if v_active else None,
             "t_low": v_active.t_low if v_active else None,
         } if v_active else None,
+        "active_model": {
+            "version": v_active_model.version if v_active_model else None,
+            "oof_auc": v_active_model.oof_auc if v_active_model else None,
+            "p_high": v_active_model.p_high if v_active_model else None,
+            "p_low": v_active_model.p_low if v_active_model else None,
+        } if v_active_model else None,
         "streak_days": streak,
         "target_days": 7,
         "total_cycles": len(cycles),
@@ -269,7 +284,10 @@ def main() -> int:
             print(f"\n[USER: {u.name} (id='{u.id}')]")
             token_display = u.access_token or "(None - visit /onboard to initialize token)"
             print(f"  Access Token:       {token_display}")
-            if data["active_vector"]:
+            if data.get("active_model"):
+                m = data["active_model"]
+                print(f"  Active Model:       CLASSIFIER v{m['version']} (OOF AUC={m['oof_auc']:.4f}, p_high={m['p_high']:.4f}, p_low={m['p_low']:.4f})")
+            elif data.get("active_vector"):
                 v = data["active_vector"]
                 method_info = f" (method='{v['method']}', labels={v['n_effective_labels']})" if v.get("method") else ""
                 print(f"  Active Vector:      v{v['version']}{method_info} (t_high={v['t_high']:.4f}, t_low={v['t_low']:.4f})")

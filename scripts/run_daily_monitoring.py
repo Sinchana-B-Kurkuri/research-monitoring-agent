@@ -150,6 +150,32 @@ def execute_daily_cycle_for_user(
         except Exception as vec_err:
             logger.warning("Could not evaluate vector update for user '%s': %s", user.id, vec_err)
 
+        # 6. Evaluate logistic regression classifier training & promotion (Phase 11)
+        try:
+            from research_monitor.relevance.classifier import train_and_evaluate_classifier
+            clf_res = train_and_evaluate_classifier(user_id=user.id, session=session)
+            if clf_res.status == "promoted":
+                logger.info(
+                    "[MODEL_PROMOTED] Promoted classifier for '%s' to v%d (OOF AUC=%.4f vs baseline=%.4f). Active for next cycle.",
+                    user.id,
+                    clf_res.version_created,
+                    clf_res.oof_auc,
+                    clf_res.oof_auc_cosine_baseline,
+                )
+                metrics["model_promoted"] = clf_res.version_created
+            elif clf_res.status == "not_promoted":
+                logger.info(
+                    "[MODEL_GUARD] Classifier for '%s' not promoted (OOF AUC=%.4f vs baseline=%.4f). Retaining current method.",
+                    user.id,
+                    clf_res.oof_auc,
+                    clf_res.oof_auc_cosine_baseline,
+                )
+                metrics["model_status"] = clf_res.reason
+            else:
+                metrics["model_status"] = clf_res.reason
+        except Exception as clf_err:
+            logger.warning("Could not evaluate classifier for user '%s': %s", user.id, clf_err)
+
         return status_tag, state.cycle_id, metrics
 
     except Exception as exc:
@@ -223,6 +249,10 @@ def run_monitoring_round(args) -> int:
                     print(f"  Preference Memory:  [UPDATED] Vector v{metrics['vector_updated']} (Rocchio centroid active for next cycle)")
                 elif metrics.get("vector_status"):
                     print(f"  Preference Memory:  [STABLE] {metrics['vector_status']}")
+                if metrics.get("model_promoted"):
+                    print(f"  Preference Model:   [PROMOTED] Classifier v{metrics['model_promoted']} (Active for next cycle)")
+                elif metrics.get("model_status"):
+                    print(f"  Preference Model:   [STATUS] {metrics['model_status']}")
                 print(f"  Review Queue URL:   http://localhost:8000/review?token={u.access_token}")
                 print(f"  Daily Digest URL:   http://localhost:8000/digest?token={u.access_token}")
             else:

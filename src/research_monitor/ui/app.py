@@ -319,6 +319,17 @@ def _render_review_page(request: Request, user: User, token: str, session: Sessi
         .all()
     )
 
+    from research_monitor.relevance.classifier import find_nearest_feedback_papers
+    for t in tasks:
+        if t.routing_decision and t.routing_decision.paper:
+            liked, rejected = find_nearest_feedback_papers(
+                paper_embedding=t.routing_decision.paper.embedding,
+                user_id=user.id,
+                session=session,
+            )
+            t.nearest_liked = liked
+            t.nearest_rejected = rejected
+
     # Get latest cycle id for convenience button
     latest_cycle = (
         session.query(Cycle)
@@ -372,6 +383,16 @@ def handle_review_action(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(pe))
     except ValueError as ve:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(ve))
+
+    from research_monitor.relevance.classifier import find_nearest_feedback_papers
+    if updated_task.routing_decision and updated_task.routing_decision.paper:
+        liked, rejected = find_nearest_feedback_papers(
+            paper_embedding=updated_task.routing_decision.paper.embedding,
+            user_id=user.id,
+            session=session,
+        )
+        updated_task.nearest_liked = liked
+        updated_task.nearest_rejected = rejected
 
     return templates.TemplateResponse(
         request=request,

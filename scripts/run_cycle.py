@@ -57,6 +57,11 @@ def main() -> None:
         action="store_true",
         help="Evaluate and update interest vector after cycle completion (Phase 10).",
     )
+    parser.add_argument(
+        "--train-model",
+        action="store_true",
+        help="Evaluate and train preference classifier after cycle completion (Phase 11).",
+    )
     args = parser.parse_args()
 
     session = SessionLocal()
@@ -68,6 +73,7 @@ def main() -> None:
             as_of_date=args.as_of_date,
             limit=args.limit,
             auto_update_vector=args.update_vector,
+            auto_train_model=args.train_model,
         )
 
         counts = state.counts
@@ -78,7 +84,8 @@ def main() -> None:
         print(f"  User ID:           {state.user_id} (simulated={state.is_simulated})")
         print(f"  Execution Mode:    {state.mode}")
         print(f"  As of Date:        {state.as_of_date}")
-        print(f"  Active Vector v:   v{state.vector_version_num} (ID {state.vector_version_id})")
+        method_info = f"CLASSIFIER (v{state.model_version_num})" if state.method == "classifier" else f"THRESHOLD (vector v{state.vector_version_num})"
+        print(f"  Routing Method:    {method_info}")
         print(f"  Threshold t_high:  {state.t_high:.4f} (P_high={state.p_high_level:.1f})")
         print(f"  Threshold t_low:   {state.t_low:.4f} (P_low={state.p_low_level:.1f})")
         print("-" * 65)

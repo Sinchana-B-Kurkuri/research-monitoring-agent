@@ -8,6 +8,7 @@ from sqlalchemy import (
     Integer,
     Float,
     DateTime,
+    LargeBinary,
     UniqueConstraint,
     ForeignKey,
 )
@@ -96,6 +97,7 @@ class User(Base):
 
     profiles = relationship("InterestProfile", back_populates="user", cascade="all, delete-orphan")
     vector_versions = relationship("InterestVectorVersion", back_populates="user", cascade="all, delete-orphan")
+    models = relationship("ModelVersion", back_populates="user", cascade="all, delete-orphan")
     cycles = relationship("Cycle", back_populates="user", cascade="all, delete-orphan")
     routing_decisions = relationship("RoutingDecision", back_populates="user", cascade="all, delete-orphan")
     summaries = relationship("Summary", back_populates="user", cascade="all, delete-orphan")
@@ -162,6 +164,49 @@ class InterestVectorVersion(Base):
             f"version={self.version}, is_active={self.is_active}, t_high={self.t_high:.4f}, t_low={self.t_low:.4f})>"
         )
 
+class ModelVersion(Base):
+    """
+    Preference memory: trained logistic regression classifier version (Roadmap Section 6 and 7.5).
+    """
+    __tablename__ = 'model_versions'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String, ForeignKey('users.id'), nullable=False, index=True)
+    version = Column(Integer, nullable=False)
+    trained_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    n_samples = Column(Integer, nullable=False)
+    n_pos = Column(Integer, nullable=False)
+    n_neg = Column(Integer, nullable=False)
+    hyperparameters = Column(JSON, nullable=True)
+    oof_auc = Column(Float, nullable=False)
+    oof_auc_cosine_baseline = Column(Float, nullable=False)
+    promoted = Column(Boolean, nullable=False)
+    p_high = Column(Float, nullable=True)
+    p_low = Column(Float, nullable=True)
+    threshold_calibration_source = Column(String, nullable=True)
+    trained_on_max_event_id = Column(Integer, nullable=True)
+    vector_version_id = Column(Integer, ForeignKey('interest_vector_versions.id'), nullable=True, index=True)
+    model_blob = Column(LargeBinary, nullable=False)
+    is_active = Column(Boolean, default=False, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint('user_id', 'version', name='uq_user_model_version'),
+    )
+
+    user = relationship("User", back_populates="models")
+    vector_version = relationship("InterestVectorVersion")
+
+    def __repr__(self):
+        return (
+            f"<ModelVersion(id={self.id}, user_id='{self.user_id}', version={self.version}, "
+            f"promoted={self.promoted}, is_active={self.is_active}, oof_auc={self.oof_auc:.4f})>"
+        )
+
+
 
 class Cycle(Base):
     """
@@ -205,7 +250,7 @@ class RoutingDecision(Base):
     vector_version_id = Column(Integer, ForeignKey('interest_vector_versions.id'), nullable=False, index=True)
     clf_prob = Column(Float, nullable=True)  # null at cold start
     method = Column(String, default="threshold", nullable=False)  # 'threshold' or 'classifier'
-    model_version_id = Column(Integer, nullable=True)  # null at cold start
+    model_version_id = Column(Integer, ForeignKey('model_versions.id'), nullable=True, index=True)  # null at cold start
     thresholds_used = Column(JSON, nullable=False)
     route = Column(String, nullable=False)   # 'HIGH', 'BORDERLINE', 'LOW'
     status = Column(String, nullable=False)  # 'ROUTED_HIGH', 'ROUTED_BORDERLINE', 'DISCARDED'
@@ -224,6 +269,7 @@ class RoutingDecision(Base):
     paper = relationship("Paper")
     cycle = relationship("Cycle", back_populates="routing_decisions")
     vector_version = relationship("InterestVectorVersion")
+    model_version = relationship("ModelVersion", foreign_keys=[model_version_id])
     review_tasks = relationship("ReviewTask", back_populates="routing_decision", cascade="all, delete-orphan")
     digest_items = relationship("DigestItem", back_populates="routing_decision", cascade="all, delete-orphan")
     feedback_events = relationship("FeedbackEvent", back_populates="routing_decision", cascade="all, delete-orphan")
