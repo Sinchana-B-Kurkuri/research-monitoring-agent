@@ -1,7 +1,7 @@
 """
 test_phase9_deployment.py
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
-Unit and integration tests for Phase 9 â€” Cold-Start Deployment & Pilot Launch:
+Unit and integration tests for Phase 9 — Cold-Start Deployment & Pilot Launch:
   1. Health check endpoint (/health) under normal and degraded conditions.
   2. Root portal navigation (/) with and without access tokens.
   3. Web process lightweight startup (no PyTorch / sentence_transformers loaded).
@@ -263,7 +263,7 @@ def test_execute_daily_cycle_empty_results(db_session, sample_pilot_user):
     mock_ingestion.skipped_duplicates = 0
     mock_ingestion.embedded = 0
 
-    with patch("scripts.run_daily_monitoring.run_live_cycle", return_value=(mock_state, mock_ingestion)):
+    with patch("scripts.run_daily_monitoring.run_live_cycle", return_value=(mock_state, mock_ingestion)), patch("scripts.run_daily_monitoring.resume_after_review", return_value=(MagicMock(items=[]), False)):
         status_tag, cycle_id, metrics = execute_daily_cycle_for_user(
             user=sample_pilot_user,
             session=db_session,

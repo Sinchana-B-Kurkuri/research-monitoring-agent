@@ -148,7 +148,11 @@ def discover_stage(
     # 4. Live mode: Query arXiv or fetch newly ingested papers from database
     elif state.mode == "live":
         try:
-            query = session.query(Paper)
+            from datetime import timedelta
+            query = session.query(Paper).filter(Paper.is_reference.is_(False))
+            if state.as_of_date:
+                window_start = (datetime.strptime(state.as_of_date, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+                query = query.filter(Paper.submitted_date >= window_start)
             if state.as_of_date:
                 query = query.filter(Paper.submitted_date <= state.as_of_date)
             if already_routed_pids:
@@ -202,80 +206,44 @@ def embed_stage(
     embeddings_path: Path | str = "data/embeddings.npy",
     corpus_path: Path | str = "data/corpus.parquet",
 ) -> PipelineState:
-    """
-    Embed stage: Attaches L2-normalized 384-dimensional embeddings.
-    In replay mode, looks up existing embeddings from DB or precomputed arrays.
-    In live mode, computes embeddings for un-embedded papers and persists them to DB.
-    """
-    embedded: list[PaperCandidate] = []
+    """Attach database/artifact embeddings or compute live vectors; never drop candidates."""
+    missing = [c for c in state.preprocessed if c.embedding is None]
+    stored = dict(session.query(Paper.id, Paper.embedding).filter(Paper.id.in_([c.paper_id for c in missing])).all()) if missing else {}
+    unresolved = [c for c in missing if stored.get(c.paper_id) is None]
+    if unresolved and state.mode == "replay":
+        corpus = pd.read_parquet(corpus_path, columns=["paper_id"])
+        vectors = np.load(embeddings_path, mmap_mode="r", allow_pickle=False)
+        if len(corpus) != len(vectors):
+            raise ValueError("Corpus and embedding artifact counts differ.")
+        lookup = {str(pid): i for i, pid in enumerate(corpus["paper_id"])}
+        for c in unresolved:
+            if c.paper_id not in lookup:
+                raise ValueError(f"Missing replay embedding for {c.paper_id}")
+            stored[c.paper_id] = vectors[lookup[c.paper_id]]
+    elif unresolved:
+        from research_monitor.ingestion.embedder import embed_texts
+        vectors = embed_texts([f"{c.title} {c.abstract}" for c in unresolved], model_name=config.EMBEDDING_MODEL)
+        if len(vectors) != len(unresolved):
+            raise ValueError("Embedding generation returned the wrong number of vectors.")
+        stored.update({c.paper_id: v for c, v in zip(unresolved, vectors)})
 
-    # Check if embeddings are already populated
-    missing_pids = [c.paper_id for c in state.preprocessed if c.embedding is None]
-
-    if not missing_pids:
-        # All embeddings already attached
-        for c in state.preprocessed:
-            v = np.asarray(c.embedding, dtype=np.float32).ravel()
-            norm = np.linalg.norm(v)
-            if norm > 0:
-                c.embedding = v / norm
-            embedded.append(c)
-        state.embedded = embedded
-        state.counts["embedded"] = len(embedded)
-        return state
-
-    # Lookup in DB first
-    db_embeddings: dict[str, np.ndarray] = {}
-    try:
-        rows = (
-            session.query(Paper.id, Paper.embedding)
-            .filter(Paper.id.in_(missing_pids))
-            .all()
-        )
-        for pid, emb in rows:
-            if emb is not None:
-                v = np.array(emb, dtype=np.float32)
-                norm = np.linalg.norm(v)
-                db_embeddings[pid] = v / norm if norm > 0 else v
-    except Exception as e:
-        logger.warning("DB embedding lookup error: %s", e)
-
-    # If in live mode and still missing, generate dynamically
-    still_missing = [c for c in state.preprocessed if c.paper_id not in db_embeddings and c.embedding is None]
-    if still_missing and state.mode == "live":
-        try:
-            from research_monitor.embeddings import compute_embeddings
-            texts = [f"{c.title}\n\n{c.abstract}" for c in still_missing]
-            new_embs = compute_embeddings(texts)
-            for c, emb in zip(still_missing, new_embs):
-                v = np.array(emb, dtype=np.float32)
-                norm = np.linalg.norm(v)
-                normed = v / norm if norm > 0 else v
-                db_embeddings[c.paper_id] = normed
-
-                paper_row = session.query(Paper).filter_by(id=c.paper_id).first()
-                if paper_row:
-                    paper_row.embedding = normed.tolist()
-                    paper_row.embedding_model = config.EMBEDDING_MODEL
-            session.commit()
-            logger.info("Dynamically embedded and updated %d papers in live mode.", len(still_missing))
-        except Exception as e:
-            logger.error("Failed to dynamically compute embeddings in live mode: %s", e)
-            raise
-
-    # Attach embeddings to candidates
     for c in state.preprocessed:
-        if c.embedding is not None:
-            v = np.asarray(c.embedding, dtype=np.float32).ravel()
-            norm = np.linalg.norm(v)
-            c.embedding = v / norm if norm > 0 else v
-            embedded.append(c)
-        elif c.paper_id in db_embeddings:
-            c.embedding = db_embeddings[c.paper_id]
-            embedded.append(c)
-
-    state.embedded = embedded
-    state.counts["embedded"] = len(embedded)
+        raw = c.embedding if c.embedding is not None else stored.get(c.paper_id)
+        v = np.asarray(raw, dtype=np.float32).ravel()
+        norm = np.linalg.norm(v)
+        if v.size != 384 or not np.isfinite(v).all() or norm == 0:
+            raise ValueError(f"Invalid embedding for {c.paper_id}")
+        c.embedding = v / norm
+        paper = session.get(Paper, c.paper_id)
+        if paper is None:
+            paper = Paper(id=c.paper_id, title=c.title, abstract=c.abstract,
+                submitted_date=c.submitted_date, categories=c.categories,
+                is_reference=c.is_reference, embedding_model=config.EMBEDDING_MODEL)
+            session.add(paper)
+        paper.embedding = c.embedding.tolist()
+    session.flush()
+    state.embedded = list(state.preprocessed)
+    state.counts["embedded"] = len(state.embedded)
     return state
 
 
@@ -565,23 +533,25 @@ def run_monitoring_cycle(
         state.t_low,
     )
 
-    # 4. State transitions: discover -> preprocess -> embed -> score -> route
-    discover_stage(state=state, session=session, limit=limit, papers_override=papers_override)
-    preprocess_stage(state=state)
-    embed_stage(state=state, session=session)
-    score_stage(state=state)
-    route_stage(state=state)
+    try:
+        # 4. State transitions: discover -> preprocess -> embed -> score -> route
+        discover_stage(state=state, session=session, limit=limit, papers_override=papers_override)
+        preprocess_stage(state=state)
+        embed_stage(state=state, session=session)
+        score_stage(state=state)
+        route_stage(state=state)
 
-    # 5. Persist auditable decisions and finish cycle
-    persist_decisions(state=state, session=session)
+        # 5. Persist auditable decisions and finish cycle
+        persist_decisions(state=state, session=session)
 
-    # 6. Queue borderline papers for human review (Phase 6)
-    if auto_build_queue:
-        try:
+        # 6. Queue borderline papers for human review (Phase 6)
+        if auto_build_queue:
             from research_monitor.review.queue import build_review_queue
             build_review_queue(user_id=user.id, cycle_id=cycle.id, session=session)
-        except Exception as e:
-            logger.warning("Could not build review queue for cycle %d: %s", cycle.id, e)
+
+    except Exception as exc:
+        record_cycle_failure(session, user_id, mode, date_str, exc, state.cycle_id)
+        raise
 
     # 7. Optionally trigger preference vector update for next cycle (Phase 10)
     if auto_update_vector:
@@ -600,3 +570,17 @@ def run_monitoring_cycle(
             logger.warning("Could not evaluate classifier update for user '%s': %s", user.id, e)
 
     return state
+
+
+def record_cycle_failure(session, user_id, mode, as_of_date, error, cycle_id=None):
+    """Persist failures after rollback, including failures before routing starts."""
+    session.rollback()
+    cycle = session.get(Cycle, cycle_id) if cycle_id is not None else None
+    if cycle is None:
+        cycle = Cycle(user_id=user_id, mode=mode,
+            as_of_date=as_of_date or datetime.now(timezone.utc).strftime("%Y-%m-%d"), counts={})
+        session.add(cycle)
+    cycle.counts = {**(cycle.counts or {}), "status": "failure", "error": type(error).__name__}
+    cycle.finished_at = datetime.now(timezone.utc)
+    session.commit()
+    return cycle.id

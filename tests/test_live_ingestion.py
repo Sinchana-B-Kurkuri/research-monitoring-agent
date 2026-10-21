@@ -326,7 +326,7 @@ def test_new_papers_enter_relevance_pipeline_with_mode_live(db_session, sample_u
             "abstract": "We adapt language models efficiently.",
             "submitted_date": "2024-03-15",
             "categories": ["cs.CL"],
-            "embedding": [0.0] * 384,
+            "embedding": [1.0] + [0.0] * 383,
         },
         {
             "paper_id": "2403.pipeline_02v1",
@@ -334,7 +334,7 @@ def test_new_papers_enter_relevance_pipeline_with_mode_live(db_session, sample_u
             "abstract": "How to bake sourdough bread.",
             "submitted_date": "2024-03-15",
             "categories": ["cs.AI"],
-            "embedding": [0.0] * 384,
+            "embedding": [1.0] + [0.0] * 383,
         },
     ]
 
@@ -482,7 +482,7 @@ def test_replay_mode_behavior_intact(db_session, sample_user):
         abstract="Replay abstract.",
         submitted_date="2024-02-01",
         categories=["cs.CL"],
-        embedding=[0.0] * 384,
+        embedding=[1.0] + [0.0] * 383,
         embedding_model="all-MiniLM-L6-v2",
         is_reference=False,
     )

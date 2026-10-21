@@ -73,13 +73,8 @@ def main() -> int:
         user = session.query(User).filter_by(id=args.user_id).first()
         if not user:
             # Check if any user exists
-            first_user = session.query(User).first()
-            if first_user:
-                logger.warning("User '%s' not found; defaulting to first available user '%s'.", args.user_id, first_user.id)
-                user = first_user
-            else:
-                logger.error("No users found in database. Run 'python scripts/create_user.py' first.")
-                return 1
+            logger.error("Unknown user '%s'. Create the user first.", args.user_id)
+            return 1
 
         logger.info(
             "Starting live monitoring cycle for user '%s' (max_results=%d, days=%d, categories=%s)...",

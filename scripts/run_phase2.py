@@ -183,8 +183,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--max-results",
         type=int,
-        default=5_000,
-        help="Maximum papers to fetch from arXiv API (default: 5000).",
+        default=10_000,
+        help="Maximum papers to fetch from arXiv API (default: 10000).",
     )
     args = parser.parse_args()
     run(args.max_results)

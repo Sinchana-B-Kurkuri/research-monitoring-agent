@@ -16,6 +16,7 @@ Follows Roadmap Section 6, 7.8, and 9.1:
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import logging
+import numpy as np
 import time
 from typing import Any, Iterator, Optional
 
@@ -41,6 +42,7 @@ class LiveIngestionResult:
     embedded: int = 0
     failed_embeddings: int = 0
     new_paper_ids: list[str] = field(default_factory=list)
+    candidate_paper_ids: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
     @property
@@ -126,6 +128,8 @@ def fetch_live_papers(
         List of cleaned, version-stripped paper dicts without duplicates.
     """
     import arxiv
+    if max_results < 1 or max_retries < 1:
+        raise ValueError("max_results and max_retries must be positive.")
 
     query = build_live_query(categories=categories, start_date=start_date, end_date=end_date)
     logger.info("Executing live arXiv query: %s (max_results=%d)", query, max_results)
@@ -305,6 +309,7 @@ def ingest_live_papers(
         })
 
     candidate_ids = [p["paper_id"] for p in normalized_candidates]
+    result.candidate_paper_ids = candidate_ids
 
     # 3. Deduplicate against existing database records
     existing_records = (
@@ -346,6 +351,12 @@ def ingest_live_papers(
             for p, vec in zip(missing_embeddings, computed_vectors):
                 p["embedding"] = vec.tolist()
 
+        for p in new_papers:
+            vector = np.asarray(p["embedding"], dtype=np.float32).ravel()
+            norm = np.linalg.norm(vector)
+            if vector.size != 384 or not np.isfinite(vector).all() or norm == 0:
+                raise ValueError("Paper embeddings must be finite, nonzero, and 384-dimensional.")
+            p["embedding"] = (vector / norm).tolist()
         result.embedded = len(new_papers)
 
     except Exception as exc:
@@ -407,24 +418,35 @@ def run_live_cycle(
     """
     from research_monitor.relevance.pipeline import run_monitoring_cycle
 
-    # 1. Ingest live papers
-    ingestion_result = ingest_live_papers(
-        session=session,
-        categories=categories,
-        max_results=max_results,
-        start_date=start_date,
-        end_date=end_date,
-        papers_override=papers_override,
-        client_override=client_override,
-    )
+    from research_monitor.database.models import Cycle, User
+    from research_monitor.relevance.pipeline import record_cycle_failure
+    if session.get(User, user_id) is None:
+        raise ValueError(f"Unknown user: {user_id}")
+    try:
+        ingestion_result = ingest_live_papers(
+            session=session, categories=categories, max_results=max_results,
+            start_date=start_date, end_date=end_date, papers_override=papers_override,
+            client_override=client_override,
+        )
+    except Exception as exc:
+        record_cycle_failure(session, user_id, "live", end_date, exc)
+        raise
 
-    # 2. Run monitoring cycle in live mode
+    # Use every eligible paper in this fetch, including globally deduplicated
+    # records another user still needs. Empty fetches must not replay history.
+    papers = session.query(Paper).filter(
+        Paper.id.in_(ingestion_result.candidate_paper_ids), Paper.is_reference.is_(False),
+    ).order_by(Paper.submitted_date.desc(), Paper.id).all()
+    candidates = [dict(id=p.id, title=p.title, abstract=p.abstract,
+        submitted_date=p.submitted_date, categories=p.categories,
+        is_reference=False, embedding=p.embedding) for p in papers]
     state = run_monitoring_cycle(
-        user_id=user_id,
-        session=session,
-        mode="live",
+        user_id=user_id, session=session, mode="live",
         as_of_date=end_date or datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-        limit=max_results,
+        limit=max_results, papers_override=candidates,
     )
-
+    cycle = session.get(Cycle, state.cycle_id)
+    cycle.counts = {**state.counts, "fetched": ingestion_result.fetched,
+        "inserted": ingestion_result.inserted, "status": "success"}
+    session.commit()
     return state, ingestion_result

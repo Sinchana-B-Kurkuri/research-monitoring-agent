@@ -30,9 +30,10 @@ from typing import Optional
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
 
 from research_monitor.config import config
-from research_monitor.database.models import User
+from research_monitor.database.models import Cycle, RoutingDecision, User
 from research_monitor.database.session import SessionLocal, init_db
-from research_monitor.ingestion.live import run_live_cycle
+from research_monitor.ingestion.live import fetch_live_papers, run_live_cycle
+from research_monitor.relevance.pipeline import record_cycle_failure
 from research_monitor.review.digest import resume_after_review
 
 logging.basicConfig(
@@ -49,6 +50,7 @@ def execute_daily_cycle_for_user(
     max_results: int,
     days: int,
     max_digest_items: int = 20,
+    papers_override=None,
 ) -> tuple[str, Optional[int], dict]:
     """
     Execute a single daily monitoring cycle for a given user.
@@ -72,6 +74,7 @@ def execute_daily_cycle_for_user(
         max_results,
     )
 
+    state = None
     try:
         # 2. Run live retrieval, deduplication, embedding, and relevance state machine
         state, ingestion = run_live_cycle(
@@ -81,6 +84,7 @@ def execute_daily_cycle_for_user(
             max_results=max_results,
             start_date=start_date,
             end_date=end_date,
+            papers_override=papers_override,
         )
 
         counts = state.counts
@@ -130,12 +134,14 @@ def execute_daily_cycle_for_user(
             )
             metrics["delivered"] = len(digest.items)
         except Exception as digest_err:
-            logger.warning("Could not pre-build digest for cycle %d: %s", state.cycle_id, digest_err)
+            raise RuntimeError("Digest assembly failed") from digest_err
 
         # 5. Evaluate preference vector update for next cycle (Phase 10)
         try:
             from research_monitor.relevance.preference import update_user_interest_vector
             vec_res = update_user_interest_vector(user_id=user.id, session=session)
+            if vec_res.status == "error":
+                raise RuntimeError(vec_res.reason)
             if vec_res.status == "updated":
                 logger.info(
                     "[VECTOR_UPDATE] Updated interest vector for '%s' to v%d (method='rocchio', t_high=%.4f, t_low=%.4f). Active for next cycle.",
@@ -148,12 +154,14 @@ def execute_daily_cycle_for_user(
             else:
                 metrics["vector_status"] = vec_res.reason
         except Exception as vec_err:
-            logger.warning("Could not evaluate vector update for user '%s': %s", user.id, vec_err)
+            raise RuntimeError("Vector update failed") from vec_err
 
         # 6. Evaluate logistic regression classifier training & promotion (Phase 11)
         try:
             from research_monitor.relevance.classifier import train_and_evaluate_classifier
             clf_res = train_and_evaluate_classifier(user_id=user.id, session=session)
+            if clf_res.status == "error":
+                raise RuntimeError(clf_res.reason)
             if clf_res.status == "promoted":
                 logger.info(
                     "[MODEL_PROMOTED] Promoted classifier for '%s' to v%d (OOF AUC=%.4f vs baseline=%.4f). Active for next cycle.",
@@ -174,14 +182,25 @@ def execute_daily_cycle_for_user(
             else:
                 metrics["model_status"] = clf_res.reason
         except Exception as clf_err:
-            logger.warning("Could not evaluate classifier for user '%s': %s", user.id, clf_err)
+            raise RuntimeError("Classifier update failed") from clf_err
 
+        pending_cycles = session.query(RoutingDecision.cycle_id).filter(
+            RoutingDecision.user_id == user.id, RoutingDecision.status == "SUMMARIZE_PENDING",
+            RoutingDecision.cycle_id != state.cycle_id).distinct().limit(20).all()
+        for (old_cycle_id,) in pending_cycles:
+            resume_after_review(user.id, old_cycle_id, session, max_digest_items=max_digest_items)
+        cycle = session.get(Cycle, state.cycle_id)
+        if cycle:
+            cycle.counts = {**(cycle.counts or {}), **metrics, "status": "empty" if ingestion.fetched == 0 else "success"}
+            session.commit()
         return status_tag, state.cycle_id, metrics
 
     except Exception as exc:
         status_tag = "[CYCLE_FAILURE]"
         logger.error("%s Daily monitoring cycle failed for user '%s': %s", status_tag, user.id, exc, exc_info=True)
         session.rollback()
+        if state is not None:
+            record_cycle_failure(session, user.id, "live", end_date, exc, state.cycle_id)
         return status_tag, None, {"error": str(exc)}
 
 
@@ -201,18 +220,12 @@ def run_monitoring_round(args) -> int:
             users = session.query(User).filter_by(is_simulated=False).all()
             if not users:
                 logger.warning("No non-simulated users found in database.")
-                users = session.query(User).all()
+                return 1
         else:
             target = session.query(User).filter_by(id=args.user_id).first()
             if not target:
-                # Check first available
-                first_u = session.query(User).first()
-                if first_u:
-                    logger.warning("User '%s' not found. Falling back to '%s'.", args.user_id, first_u.id)
-                    users = [first_u]
-                else:
-                    logger.error("No users found in database. Run 'python scripts/create_user.py' first.")
-                    return 1
+                logger.error("Unknown user '%s'. Create the user first.", args.user_id)
+                return 1
             else:
                 users = [target]
 
@@ -225,6 +238,15 @@ def run_monitoring_round(args) -> int:
         print(f"  Rolling Window:  {days} day(s)")
         print("=" * 70)
 
+        now = datetime.now(timezone.utc)
+        try:
+            shared_papers = fetch_live_papers(categories=categories_list, max_results=args.max_results,
+                start_date=(now - timedelta(days=days)).strftime("%Y-%m-%d"), end_date=now.strftime("%Y-%m-%d"))
+        except Exception as exc:
+            for u in users:
+                record_cycle_failure(session, u.id, "live", now.strftime("%Y-%m-%d"), exc)
+            logger.error("[CYCLE_FAILURE] Shared arXiv fetch failed: %s", type(exc).__name__)
+            return 1
         for u in users:
             status_tag, cycle_id, metrics = execute_daily_cycle_for_user(
                 user=u,
@@ -233,6 +255,7 @@ def run_monitoring_round(args) -> int:
                 max_results=args.max_results,
                 days=days,
                 max_digest_items=args.max_digest,
+                papers_override=shared_papers,
             )
 
             if status_tag == "[CYCLE_FAILURE]":
@@ -315,12 +338,15 @@ def main() -> int:
     )
 
     args = parser.parse_args()
+    if args.max_results < 1 or args.max_digest < 0 or args.interval_hours <= 0:
+        parser.error("max-results/interval-hours must be positive; max-digest must be nonnegative.")
 
     # Ensure DB schema is ready
     try:
         init_db()
     except Exception as e:
-        logger.warning("DB init check returned: %s. Proceeding with active session.", e)
+        logger.error("Database initialization failed: %s", e)
+        return 1
 
     if not args.daemon:
         # Run one-shot cycle

@@ -105,7 +105,7 @@ def inspect_user_pilot_progress(user: User, session) -> dict:
                 c_date = datetime.strptime(c.as_of_date, "%Y-%m-%d").date()
             except Exception:
                 pass
-        if c_date:
+        if c_date and c.mode == "live" and c.finished_at and not (c.counts or {}).get("error"):
             cycle_dates.append(c_date)
 
         counts = c.counts or {}
@@ -167,7 +167,7 @@ def inspect_user_pilot_progress(user: User, session) -> dict:
     )
     dislikes_count = (
         session.query(FeedbackEvent)
-        .filter_by(user_id=user.id, source="user", label=-1)
+        .filter_by(user_id=user.id, source="user", label=0)
         .count()
     )
 

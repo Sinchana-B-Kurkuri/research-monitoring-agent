@@ -80,6 +80,9 @@ def apply_oracle_feedback(
         oracle = SimulationOracle(ground_truth_map=gt_map, noise_rate=noise_rate)
 
         # 1. Resolve target cycle
+        user = session.get(User, user_id)
+        if user is None or not user.is_simulated:
+            raise ValueError("Oracle feedback is restricted to simulated users.")
         query = session.query(Cycle).filter_by(user_id=user_id)
         if cycle_id is not None:
             cycle = query.filter_by(id=cycle_id).first()
@@ -112,20 +115,8 @@ def apply_oracle_feedback(
             meta = {"title": paper.title, "abstract": paper.abstract} if paper else None
             oracle_dec = oracle.get_reviewer_decision(dec.paper_id, meta)
             
-            task.decision = oracle_dec
-            task.decided_at = now
-
-            # Emit reviewer feedback event
-            lbl_val = 1 if oracle_dec == "accept" else 0
-            fe = FeedbackEvent(
-                user_id=user_id,
-                paper_id=dec.paper_id,
-                source="reviewer",
-                label=lbl_val,
-                decision_id=dec.id,
-                created_at=now,
-            )
-            session.add(fe)
+            from research_monitor.review.queue import record_review_action
+            record_review_action(task.id, oracle_dec, user_id, session)
             reviewer_count += 1
 
         session.commit()

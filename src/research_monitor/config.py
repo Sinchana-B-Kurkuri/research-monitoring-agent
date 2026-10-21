@@ -1,4 +1,6 @@
 import os
+import json
+from pathlib import Path
 from dotenv import load_dotenv
 
 # Load environment variables from .env file if present
@@ -78,15 +80,30 @@ class Config:
     REVIEW_QUEUE_MAX_TASKS = int(os.getenv("REVIEW_QUEUE_MAX_TASKS", "15"))
     DIGEST_MAX_ITEMS = int(os.getenv("DIGEST_MAX_ITEMS", "20"))
 
+    CALIBRATION_PATH = os.getenv("CALIBRATION_PATH", "data/calibrated_thresholds.json")
+
+    def active_percentiles(self):
+        saved = {}
+        path = Path(self.CALIBRATION_PATH)
+        if path.exists():
+            saved = json.loads(path.read_text(encoding="utf-8"))
+            if saved.get("status") != "calibrated" or saved.get("data_split") != "dev":
+                saved = {}
+        high = self.CALIBRATED_P_HIGH if self.CALIBRATED_P_HIGH is not None else saved.get("p_high", self.PROVISIONAL_P_HIGH)
+        low = self.CALIBRATED_P_LOW if self.CALIBRATED_P_LOW is not None else saved.get("p_low", self.PROVISIONAL_P_LOW)
+        if not 0 <= float(low) < float(high) <= 100:
+            raise ValueError("Percentiles must satisfy 0 <= P_low < P_high <= 100.")
+        return float(high), float(low)
+
     @property
     def active_p_high(self) -> float:
         """Returns calibrated P_high if set, otherwise provisional P_high."""
-        return self.CALIBRATED_P_HIGH if self.CALIBRATED_P_HIGH is not None else self.PROVISIONAL_P_HIGH
+        return self.active_percentiles()[0]
 
     @property
     def active_p_low(self) -> float:
         """Returns calibrated P_low if set, otherwise provisional P_low."""
-        return self.CALIBRATED_P_LOW if self.CALIBRATED_P_LOW is not None else self.PROVISIONAL_P_LOW
+        return self.active_percentiles()[1]
 
 
 config = Config()

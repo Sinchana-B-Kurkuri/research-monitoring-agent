@@ -109,3 +109,39 @@ def test_missing_api_key_never_implicitly_selects_mock(monkeypatch):
     from research_monitor import config
     monkeypatch.setattr(config, "GEMINI_API_KEY", "")
     assert isinstance(get_summarizer(), GeminiSummarizer)
+
+
+from research_monitor.ingestion.live import run_live_cycle
+from research_monitor.relevance.state import PipelineState, PaperCandidate
+from research_monitor.relevance.pipeline import embed_stage
+
+
+def test_empty_live_fetch_never_routes_historical_reference_papers(db_session, sample_user):
+    db_session.add(InterestVectorVersion(user_id=sample_user.id, version=0, vector=[1.] + [0.]*383,
+        method="seed", p_high_level=98, p_low_level=90, t_high=.8, t_low=.3, is_active=True))
+    db_session.add(Paper(id="historic", title="Old", abstract="Abstract", submitted_date="2024-01-01",
+        categories=["cs.AI"], embedding=[1.] + [0.]*383, embedding_model="test", is_reference=True))
+    db_session.commit()
+    state, ingestion = run_live_cycle(sample_user.id, db_session, papers_override=[])
+    assert ingestion.fetched == 0 and state.counts["total_routed"] == 0
+    assert db_session.query(RoutingDecision).count() == 0
+
+
+def test_replay_embedding_artifact_fallback_is_aligned_by_id(db_session, sample_user, tmp_path):
+    corpus = tmp_path / "corpus.parquet"
+    vectors = tmp_path / "embeddings.npy"
+    pd.DataFrame({"paper_id": ["unrelated", "wanted"]}).to_parquet(corpus)
+    np.save(vectors, np.array([[0.,1.] + [0.]*382, [1.] + [0.]*383]))
+    state = PipelineState(user_id=sample_user.id, mode="replay")
+    state.preprocessed = [PaperCandidate("wanted", "Title", "Abstract", "2024-01-01")]
+    embed_stage(state, db_session, corpus_path=corpus, embeddings_path=vectors)
+    assert len(state.embedded) == 1 and state.embedded[0].embedding[0] == 1
+    assert db_session.get(Paper, "wanted") is not None
+
+
+def test_live_fetch_failure_is_durably_recorded(db_session, sample_user):
+    with patch("research_monitor.ingestion.live.fetch_live_papers", side_effect=RuntimeError("offline")):
+        with pytest.raises(RuntimeError, match="offline"):
+            run_live_cycle(sample_user.id, db_session)
+    cycle = db_session.query(Cycle).one()
+    assert cycle.counts["status"] == "failure" and cycle.finished_at is not None
