@@ -360,6 +360,10 @@ def plot_pilot_before_after(csv_path: Path = RESULTS_DIR / "final_pilot_before_a
     if df.empty or "user_id" not in df.columns:
         return None
 
+    if "has_vector_activation" in df:
+        df = df[df["has_vector_activation"].fillna(False)]
+        if df.empty:
+            return None
     fig, ax = plt.subplots(figsize=(10, 5), dpi=300)
     users = df["user_id"].unique()
     indices = np.arange(len(users))

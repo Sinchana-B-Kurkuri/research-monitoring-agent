@@ -136,13 +136,15 @@ def print_dashboard(report: dict):
             print(f"      * {note}")
 
     print(f"\n[6] DELIVERABLE ARTIFACTS GENERATED")
-    print(f"    Master Report:               experiments/results/final_evaluation_report.json")
-    print(f"    Readiness Audit:             experiments/results/readiness_report.json")
-    print(f"    Pilot Telemetry Export:      data/pilot_export/pilot_records_clean.csv")
-    print(f"    Audit Log:                   data/pilot_export/audit_log.json")
-    print(f"    E7 Pilot Table:              experiments/results/final_e7_pilot.csv")
-    print(f"    Before/After Table:          experiments/results/final_pilot_before_after.csv")
-    print(f"    Efficiency Table:            experiments/results/final_efficiency.csv")
+    result_root = Path((report.get("efficiency_analysis") or {}).get("output_csv", "experiments/results/final_efficiency.csv")).parent
+    export_root = Path((report.get("export_summary") or {}).get("output_dir", "data/pilot_export"))
+    print(f"    Master Report:               {result_root / 'final_evaluation_report.json'}")
+    print(f"    Readiness Audit:             {result_root / 'readiness_report.json'}")
+    print(f"    Pilot Telemetry Export:      {export_root / 'pilot_records_clean.csv'}")
+    print(f"    Audit Log:                   {export_root / 'audit_log.json'}")
+    print(f"    E7 Pilot Table:              {result_root / 'final_e7_pilot.csv'}")
+    print(f"    Before/After Table:          {result_root / 'final_pilot_before_after.csv'}")
+    print(f"    Efficiency Table:            {result_root / 'final_efficiency.csv'}")
 
     print("\n" + "=" * 78)
 
@@ -204,7 +206,9 @@ def main():
         print(f"Generated {len(figs)} figures under {results_dir}")
 
     print_dashboard(report)
+    result_status = (report.get("e1_gate_quality") or {}).get("status", "NOT_REQUESTED")
+    return 1 if result_status == "ERROR" else (2 if result_status.startswith("BLOCKED") else 0)
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

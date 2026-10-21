@@ -350,7 +350,7 @@ def export_adaptation_table(
             "h2_note": h2.get("note"),
         })
 
-    df = pd.DataFrame(rows)
+    df = pd.DataFrame(rows) if rows else pd.DataFrame(columns=["user_id", "status"])
     df.to_csv(out_csv, index=False)
     logger.info("Saved Before/After Adaptation table to %s", out_csv)
     return out_csv

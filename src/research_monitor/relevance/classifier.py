@@ -42,7 +42,7 @@ from research_monitor.database.models import (
     User,
     ValidationLabel,
 )
-from research_monitor.relevance.preference import get_user_seed_embedding
+from research_monitor.relevance.preference import compute_rocchio_centroid, get_user_seed_embedding
 from research_monitor.relevance.user_manager import get_active_vector_version
 from research_monitor.review.labels import get_effective_training_labels
 
@@ -318,6 +318,7 @@ def _evaluate_repeated_stratified_oof(
     n_splits: int = 5,
     n_repeats: int = 3,
     random_state: int = 42,
+    baseline_seed: Optional[np.ndarray] = None,
 ) -> tuple[float, float, np.ndarray, float]:
     """
     Repeated stratified 5-fold cross-validation with out-of-fold probability estimation.
@@ -331,6 +332,7 @@ def _evaluate_repeated_stratified_oof(
 
     oof_prob_matrix = np.zeros((n_samples, n_repeats), dtype=np.float32)
     fold_occurrences = np.zeros(n_samples, dtype=np.int32)
+    baseline_matrix = np.zeros((n_samples, n_repeats), dtype=np.float32)
 
     split_count = 0
     for train_idx, val_idx in rskf.split(X, y):
@@ -353,6 +355,11 @@ def _evaluate_repeated_stratified_oof(
         model.fit(X_tr, y_tr)
         probs_val = model.predict_proba(X_val)[:, 1]
 
+        baseline_vector = active_centroid
+        if baseline_seed is not None:
+            baseline_vector = compute_rocchio_centroid(baseline_seed, X_tr[y_tr == 1], X_tr[y_tr == 0])
+        baseline_vector = baseline_vector / np.linalg.norm(baseline_vector)
+        baseline_matrix[val_idx, repeat_idx] = X_val @ baseline_vector
         oof_prob_matrix[val_idx, repeat_idx] = probs_val
         fold_occurrences[val_idx] += 1
 
@@ -361,7 +368,7 @@ def _evaluate_repeated_stratified_oof(
 
     # Cosine baseline on identical embeddings
     centroid = active_centroid / np.linalg.norm(active_centroid)
-    cosine_scores = X @ centroid
+    cosine_scores = baseline_matrix.mean(axis=1)
 
     clf_auc = float(roc_auc_score(y, oof_probs))
     base_auc = float(roc_auc_score(y, cosine_scores))
@@ -539,6 +546,7 @@ def train_and_evaluate_classifier(
             n_splits=5,
             n_repeats=3,
             random_state=random_state,
+            baseline_seed=get_user_seed_embedding(user_id, session) if v_active and v_active.method == "rocchio" else None,
         )
     except Exception as exc:
         logger.error("Classifier CV evaluation failed for user '%s': %s", user_id, exc)

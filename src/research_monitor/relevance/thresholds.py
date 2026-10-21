@@ -154,14 +154,15 @@ def compute_vector_thresholds(
                     WHERE is_reference = TRUE
                     """
                 )
-                res = session.execute(
-                    query,
-                    {
-                        "p_high_frac": p_high_frac,
-                        "p_low_frac": p_low_frac,
-                        "vec_str": vec_str,
-                    },
-                ).fetchone()
+                with session.begin_nested():
+                    res = session.execute(
+                        query,
+                        {
+                            "p_high_frac": p_high_frac,
+                            "p_low_frac": p_low_frac,
+                            "vec_str": vec_str,
+                        },
+                    ).fetchone()
 
                 if (
                     res

@@ -189,6 +189,8 @@ def run_experiment_e7_pilot(
 
     # Save final E7 CSV
     df_e7 = pd.DataFrame(participant_rows)
+    if df_e7.empty:
+        df_e7 = pd.DataFrame(columns=["user_id", "like_rate_pre", "like_rate_post", "review_burden_pre", "review_burden_post", "usefulness_score", "summary_helpfulness_score"])
     e7_csv_path = out_dir / "final_e7_pilot.csv"
     df_e7.to_csv(e7_csv_path, index=False)
     logger.info("Saved Final E7 Pilot table to %s", e7_csv_path)

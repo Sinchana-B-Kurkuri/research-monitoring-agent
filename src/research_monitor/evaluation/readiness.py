@@ -334,7 +334,10 @@ def check_pilot_readiness(
     if session is not None:
         tokens_count = (
             session.query(Summary)
-            .filter(Summary.tokens_in.isnot(None), Summary.tokens_out.isnot(None))
+            .join(RoutingDecision, Summary.decision_id == RoutingDecision.id)
+            .filter(Summary.tokens_in.isnot(None), Summary.tokens_out.isnot(None),
+                ~Summary.llm_model.like("mock%"), Summary.user_id.in_(genuine_uids),
+                RoutingDecision.cycle_id.in_([c.id for c in genuine_cycles if is_valid_live_cycle(c)]))
             .count()
         )
         tokens_recorded = tokens_count > 0

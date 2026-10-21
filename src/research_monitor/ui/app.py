@@ -49,6 +49,22 @@ from research_monitor.review.digest import (
 from research_monitor.review.queue import record_review_action
 from research_monitor.summary.service import summarize_decision_background
 
+class AccessTokenLogFilter(logging.Filter):
+    """Redact bearer links from Uvicorn's access-log arguments."""
+    def filter(self, record):
+        def redact(value):
+            if not isinstance(value, str):
+                return value
+            value = re.sub(r"([?&]token=)[^&\s]*", r"\1[REDACTED]", value)
+            return re.sub(r"(/(?:review|digest|audit)/)[^/?\s]+(?=\?|$)", r"\1[REDACTED]", value)
+        if isinstance(record.args, tuple):
+            record.args = tuple(redact(value) for value in record.args)
+        record.msg = redact(record.msg)
+        return True
+
+
+logging.getLogger("uvicorn.access").addFilter(AccessTokenLogFilter())
+
 logger = logging.getLogger(__name__)
 
 # Template and script paths
@@ -58,6 +74,14 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 CREATE_USER_SCRIPT = PROJECT_ROOT / "scripts" / "create_user.py"
 
 app = FastAPI(title="Research Monitor UI", version="0.9.0")
+
+
+@app.middleware("http")
+async def protect_personal_links(request, call_next):
+    response = await call_next(request)
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 def get_db() -> Generator[Session, None, None]:
