@@ -56,12 +56,8 @@ logger = logging.getLogger(__name__)
 
 def _compute_seed_vector() -> np.ndarray:
     """Computes normalized seed interest embedding using the configured model."""
-    from sentence_transformers import SentenceTransformer
-    model_name = getattr(config, "EMBEDDING_MODEL", "all-MiniLM-L6-v2")
-    model = SentenceTransformer(model_name)
-    vec = model.encode(config.SEED_INTEREST, convert_to_numpy=True)
-    norm = np.linalg.norm(vec)
-    return vec / norm if norm > 0 else vec
+    from research_monitor.relevance.user_manager import _generate_seed_vector
+    return _generate_seed_vector(config.SEED_INTEREST)
 
 
 def run_experiment_e7_pilot(
@@ -234,6 +230,7 @@ def run_final_evaluation_suite(
     results_dir: Path | str = RESULTS_DIR,
     run_offline_e1: bool = True,
     run_offline_simulations: bool = False,
+    allow_partial_labels: bool = False,
 ) -> Dict[str, Any]:
     """
     Master Phase 13 Evaluation Suite Runner.
@@ -292,6 +289,7 @@ def run_final_evaluation_suite(
     # -------------------------------------------------------------
     e1_results = None
     simulation_results = {"status": "NOT_REQUESTED"}
+    label_coverage = {"total": 0, "labeled": 0, "missing": 0, "scope": "not_requested"}
     if run_offline_e1 or run_offline_simulations:
         try:
             sample_path = Path("data/evaluation_sample.parquet")
@@ -301,8 +299,14 @@ def run_final_evaluation_suite(
                 labels_df = labels_df[labels_df["user_id"] == "developer"]
             gt_map = dict(zip(labels_df["paper_id"].astype(str), labels_df["label"])) if labels_df is not None else {}
             missing = set(sample_df["paper_id"].astype(str)) - set(gt_map)
-            if missing:
+            label_coverage = {"total": len(sample_df), "labeled": len(sample_df)-len(missing),
+                "missing": len(missing), "scope": "labeled_subset" if missing else "full_sample"}
+            if missing and not allow_partial_labels:
                 raise BlockedExperimentError(f"{len(missing)} of {len(sample_df)} frozen sample papers lack human labels. Final evaluation is held; missing labels are not negatives.")
+            if missing:
+                sample_df = sample_df[sample_df["paper_id"].astype(str).isin(gt_map)].reset_index(drop=True)
+            if sample_df.empty:
+                raise BlockedExperimentError("No human-labeled papers are available yet; operational and feedback reports are still produced.")
             corpus_df = pd.read_parquet("data/corpus.parquet")
             all_embs = np.load("data/embeddings.npy", allow_pickle=False)
             if len(all_embs) != len(corpus_df):
@@ -319,16 +323,20 @@ def run_final_evaluation_suite(
             ref_scores = all_embs[ref_mask] @ seed_vector
             t_high, t_low = np.percentile(ref_scores, [config.active_p_high, config.active_p_low])
             corpus_texts = (corpus_df.loc[ref_mask, "title"] + " " + corpus_df.loc[ref_mask, "abstract"]).tolist()
-            if sum(gt_map[str(pid)] == "relevant" for pid in test_df["paper_id"]) < 30:
+            if not allow_partial_labels and sum(gt_map[str(pid)] == "relevant" for pid in test_df["paper_id"]) < 30:
                 raise BlockedExperimentError("Frozen test split requires at least 30 relevant human labels.")
             if run_offline_e1:
                 table = run_experiment_e1_gate_quality(test_df, test_embeddings, seed_vector,
                     ground_truth_labels=gt_map, dev_df=dev_df, t_high=t_high, t_low=t_low,
                     corpus_texts=corpus_texts, output_dir=res_dir)
                 path = res_dir / "final_e1_gate_quality.csv"
+                table["evaluation_scope"] = label_coverage["scope"]
+                table["human_labeled_sample"] = label_coverage["labeled"]
+                table["planned_sample"] = label_coverage["total"]
                 table.to_csv(path, index=False)
-                e1_results = {"status": "COMPLETED", "test_sample_count": len(test_df),
-                    "labeled_overlap": len(test_df), "output_csv": str(path)}
+                e1_results = {"status": "COMPLETED_PARTIAL" if missing else "COMPLETED", "test_sample_count": len(test_df),
+                    "labeled_overlap": len(test_df), "output_csv": str(path),
+                    "message": "Descriptive results on the available human-labeled subset; missing labels may introduce selection bias. These are not final full-sample claims." if missing else "Complete human-labeled sample evaluated."}
             if run_offline_simulations:
                 from research_monitor.evaluation import experiments as exp
                 from research_monitor.evaluation.simulation import SimulationOracle
@@ -345,7 +353,7 @@ def run_final_evaluation_suite(
                     oracle=oracle, paper_ids=test_df["paper_id"].astype(str).tolist(), output_dir=res_dir)
                 simulation_results = {"status": "COMPLETED", "is_simulated": True}
         except (BlockedExperimentError, FileNotFoundError) as exc:
-            result = {"status": "BLOCKED_INCOMPLETE_DATA", "message": str(exc)}
+            result = {"status": "INSUFFICIENT_LABELED_DATA" if allow_partial_labels else "BLOCKED_INCOMPLETE_DATA", "message": str(exc)}
             e1_results = result if run_offline_e1 else None
             simulation_results = result if run_offline_simulations else simulation_results
         except Exception as exc:
@@ -418,8 +426,9 @@ def run_final_evaluation_suite(
         "readiness": readiness.to_dict(),
         "numbers_frozen": numbers_frozen,
         "completion_status": (
-            "COMPLETE" if numbers_frozen else "IN_PROGRESS_PARTIAL_DATA"
+            "COMPLETE" if numbers_frozen else ("COMPLETED_WITH_AVAILABLE_DATA" if allow_partial_labels else "IN_PROGRESS_PARTIAL_DATA")
         ),
+        "label_coverage": label_coverage,
         "e1_gate_quality": e1_results,
         "offline_simulations": simulation_results,
         "e7_pilot_evaluation": e7_results,

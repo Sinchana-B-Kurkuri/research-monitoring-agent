@@ -81,11 +81,12 @@ def print_dashboard(report: dict):
             print(f"      * {m}")
 
     print(f"\n[2] E1: GATE QUALITY (Frozen Test Split)")
-    e1 = report.get("e1_gate_quality", {})
+    e1 = report.get("e1_gate_quality") or {}
     print(f"    Status:                      {e1.get('status', 'NOT RUN')}")
-    if e1.get("status") == "COMPLETED":
+    if e1.get("status") in {"COMPLETED", "COMPLETED_PARTIAL"}:
         print(f"    Test Set Overlap:            {e1.get('labeled_overlap')} papers")
         print(f"    Output Table:                {e1.get('output_csv')}")
+        print(f"    Evidence Scope:              {report.get('label_coverage', {}).get('scope', 'unknown')}")
     elif e1.get("message"):
         print(f"    Notice:                      {e1.get('message')}")
 
@@ -183,6 +184,7 @@ def main():
     )
 
     parser.add_argument("--simulations", action="store_true", help="Also execute E2-E6 from complete human-labeled inputs.")
+    parser.add_argument("--strict", action="store_true", help="Require the full frozen label set for final research evaluation. Default evaluates currently available human labels.")
     args = parser.parse_args()
 
     results_dir = Path(args.results_dir)
@@ -196,6 +198,7 @@ def main():
         results_dir=results_dir,
         run_offline_e1=not args.skip_e1,
         run_offline_simulations=args.simulations,
+        allow_partial_labels=not args.strict,
     )
 
     if args.figures:
