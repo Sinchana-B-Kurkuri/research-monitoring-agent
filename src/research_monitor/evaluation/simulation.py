@@ -27,6 +27,7 @@ import pandas as pd
 from sklearn.metrics import roc_auc_score
 
 from research_monitor.evaluation.baselines import (
+    evaluate_at_matched_volume,
     score_centroid_b3,
     score_embedding_b2,
     train_and_score_embedding_logreg_b5,
@@ -63,8 +64,10 @@ class SimulationOracle:
         ground_truth_map: Optional[dict[str, str]] = None,
         noise_rate: float = 0.0,
         seed: int = 42,
+        allow_heuristic: bool = False,
     ) -> None:
         self.ground_truth_map = ground_truth_map or {}
+        self.allow_heuristic = allow_heuristic
         self.noise_rate = max(0.0, min(1.0, float(noise_rate)))
         self.rng = np.random.default_rng(seed)
 
@@ -81,7 +84,7 @@ class SimulationOracle:
         if raw_label is not None:
             canonical = str(raw_label).strip().lower()
             val = 1 if canonical == "relevant" else 0
-        elif paper_meta is not None:
+        elif self.allow_heuristic and paper_meta is not None:
             # Fallback heuristic: check title + abstract for core seed interests
             text = (
                 str(paper_meta.get("title", "")) + " " + str(paper_meta.get("abstract", ""))
@@ -100,7 +103,7 @@ class SimulationOracle:
             match_count = sum(1 for kw in keywords if kw in text)
             val = 1 if match_count >= 2 else 0
         else:
-            val = 0
+            raise ValueError(f"Missing human label for {paper_id}; enable explicit heuristic simulation to continue.")
 
         # 2. Apply noise sensitivity if specified
         if self.noise_rate > 0.0 and self.rng.uniform(0.0, 1.0) < self.noise_rate:
@@ -172,7 +175,7 @@ def run_protocol_a(
       (system_curve_points, b4_curve_points)
     """
     dev_n = len(dev_df)
-    test_weights = test_df["sampling_weight"].values if "sampling_weight" in test_df.columns else None
+    test_weights = test_df["sampling_weight"].values if "sampling_weight" in test_df.columns else np.ones(len(test_df))
 
     # Derive test ground truth labels
     y_test = np.array([
@@ -193,7 +196,7 @@ def run_protocol_a(
     b2_scores = score_embedding_b2(test_embeddings, seed_vector)
     b2_pr_auc = float(weighted_pr_auc(y_test, b2_scores, test_weights))
     b2_roc_auc = float(roc_auc_score(y_test, b2_scores, sample_weight=test_weights))
-    b2_f1 = float(weighted_f1(y_test, b2_scores >= 0.5, test_weights))
+    b2_f1 = float(evaluate_at_matched_volume(b2_scores, y_test, max(1, round(.02 * len(y_test))), test_weights)["f1"])
 
     system_points: list[LearningCurvePoint] = []
     b4_points: list[LearningCurvePoint] = []
@@ -287,7 +290,7 @@ def run_protocol_a(
 
             sys_pr_aucs.append(float(weighted_pr_auc(y_test, scores, test_weights)))
             sys_roc_aucs.append(float(roc_auc_score(y_test, scores, sample_weight=test_weights)))
-            sys_f1s.append(float(weighted_f1(y_test, scores >= 0.5, test_weights)))
+            sys_f1s.append(float(evaluate_at_matched_volume(scores, y_test, max(1, round(.02 * len(y_test))), test_weights)["f1"]))
 
             # 2. B4 TF-IDF LogReg Evaluation
             b4_scores = train_and_score_tfidf_logreg_b4(
@@ -300,7 +303,7 @@ def run_protocol_a(
             )
             b4_pr_aucs.append(float(weighted_pr_auc(y_test, b4_scores, test_weights)))
             b4_roc_aucs.append(float(roc_auc_score(y_test, b4_scores, sample_weight=test_weights)))
-            b4_f1s.append(float(weighted_f1(y_test, b4_scores >= 0.5, test_weights)))
+            b4_f1s.append(float(evaluate_at_matched_volume(b4_scores, y_test, max(1, round(.02 * len(y_test))), test_weights)["f1"]))
 
         # Aggregate System stats
         sys_mean_pr = float(np.mean(sys_pr_aucs))
@@ -376,7 +379,7 @@ def run_protocol_b(
     Returns:
       (learning_curve_points, pool_capacities)
     """
-    test_weights = test_df["sampling_weight"].values if "sampling_weight" in test_df.columns else None
+    test_weights = test_df["sampling_weight"].values if "sampling_weight" in test_df.columns else np.ones(len(test_df))
 
     # Derive test ground truth labels
     y_test = np.array([
@@ -412,7 +415,7 @@ def run_protocol_b(
     b2_scores = score_embedding_b2(test_embeddings, seed_vector)
     b2_pr_auc = float(weighted_pr_auc(y_test, b2_scores, test_weights))
     b2_roc_auc = float(roc_auc_score(y_test, b2_scores, sample_weight=test_weights))
-    b2_f1 = float(weighted_f1(y_test, b2_scores >= 0.5, test_weights))
+    b2_f1 = float(evaluate_at_matched_volume(b2_scores, y_test, max(1, round(.02 * len(y_test))), test_weights)["f1"])
 
     curve_points: list[LearningCurvePoint] = []
 
@@ -496,7 +499,7 @@ def run_protocol_b(
 
             pr_aucs.append(float(weighted_pr_auc(y_test, scores, test_weights)))
             roc_aucs.append(float(roc_auc_score(y_test, scores, sample_weight=test_weights)))
-            f1s.append(float(weighted_f1(y_test, scores >= 0.5, test_weights)))
+            f1s.append(float(evaluate_at_matched_volume(scores, y_test, max(1, round(.02 * len(y_test))), test_weights)["f1"]))
 
         mean_pr = float(np.mean(pr_aucs))
         std_pr = float(np.std(pr_aucs))
@@ -545,7 +548,7 @@ def run_signal_ablation_e3(
     Returns:
       dict with keys 'user_only', 'reviewer_only', 'combined'.
     """
-    test_weights = test_df["sampling_weight"].values if "sampling_weight" in test_df.columns else None
+    test_weights = test_df["sampling_weight"].values if "sampling_weight" in test_df.columns else np.ones(len(test_df))
 
     # Derive test ground truth labels
     y_test = np.array([
@@ -597,7 +600,7 @@ def run_signal_ablation_e3(
 
                 pr_list.append(float(weighted_pr_auc(y_test, scores, test_weights)))
                 roc_list.append(float(roc_auc_score(y_test, scores, sample_weight=test_weights)))
-                f1_list.append(float(weighted_f1(y_test, scores >= 0.5, test_weights)))
+                f1_list.append(float(evaluate_at_matched_volume(scores, y_test, max(1, round(.02 * len(y_test))), test_weights)["f1"]))
 
             results[condition].append({
                 "n_feedback": n,
@@ -637,7 +640,7 @@ def run_signal_ablation_e3(
 
                 pr_list.append(float(weighted_pr_auc(y_test, scores, test_weights)))
                 roc_list.append(float(roc_auc_score(y_test, scores, sample_weight=test_weights)))
-                f1_list.append(float(weighted_f1(y_test, scores >= 0.5, test_weights)))
+                f1_list.append(float(evaluate_at_matched_volume(scores, y_test, max(1, round(.02 * len(y_test))), test_weights)["f1"]))
 
             results["combined"].append({
                 "n_feedback": n,

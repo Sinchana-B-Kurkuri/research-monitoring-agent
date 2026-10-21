@@ -404,7 +404,8 @@ def regenerate_all_figures() -> list[Path]:
         plot_e7_pilot_metrics,
         plot_pilot_before_after,
     ]:
-        p = fn()
+        csv_name = {"plot_e7_pilot_metrics": "final_e7_pilot", "plot_pilot_before_after": "final_pilot_before_after"}.get(fn.__name__, fn.__name__.removeprefix("plot_"))
+        p = fn(RESULTS_DIR / f"{csv_name}.csv")
         if p is not None:
             generated.append(p)
     return generated

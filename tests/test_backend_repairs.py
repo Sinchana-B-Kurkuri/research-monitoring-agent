@@ -145,3 +145,68 @@ def test_live_fetch_failure_is_durably_recorded(db_session, sample_user):
             run_live_cycle(sample_user.id, db_session)
     cycle = db_session.query(Cycle).one()
     assert cycle.counts["status"] == "failure" and cycle.finished_at is not None
+
+
+from research_monitor.evaluation.experiments import BlockedExperimentError, run_experiment_e1_gate_quality
+from research_monitor.evaluation.simulation import SimulationOracle
+from research_monitor.evaluation.readiness import check_pilot_readiness
+from research_monitor.evaluation.pilot_export import export_pilot_dataset
+from research_monitor.evaluation.efficiency import calculate_operational_efficiency
+from research_monitor.evaluation.survey import get_survey_path, compute_survey_statistics
+
+
+def test_e1_refuses_to_invent_negative_labels():
+    frame = pd.DataFrame({"paper_id": ["known", "unknown"], "title": ["A", "B"], "abstract": ["A", "B"]})
+    with pytest.raises(BlockedExperimentError, match="Missing human labels"):
+        run_experiment_e1_gate_quality(frame, np.ones((2, 384)), np.ones(384),
+            ground_truth_labels={"known": "relevant"})
+
+
+def test_oracle_requires_explicit_heuristic_mode():
+    with pytest.raises(ValueError, match="Missing human label"):
+        SimulationOracle().evaluate_paper("unknown", {"title": "LLM agents planning"})
+    assert SimulationOracle(allow_heuristic=True).evaluate_paper("unknown", {"title": "LLM agents planning"}) == 1
+
+
+def test_readiness_counts_distinct_effective_live_labels(db_session, sample_user, sample_cycle, tmp_path):
+    sample_cycle.mode = "live"
+    sample_cycle.finished_at = datetime.now(timezone.utc)
+    dec = _create_paper_and_decision(db_session, sample_user.id, sample_cycle.id, "repeated", "HIGH", .8, "DELIVERED")
+    for _ in range(40):
+        db_session.add(FeedbackEvent(user_id=sample_user.id, paper_id=dec.paper_id,
+            decision_id=dec.id, source="user", label=1))
+    db_session.commit()
+    result = check_pilot_readiness(db_session, survey_dir=tmp_path)
+    assert result.checklists["pilot"]["user_eligibility_details"][sample_user.id]["effective_labels"] == 1
+    assert not result.can_freeze_final_numbers
+
+
+def test_export_applies_requested_user_filter(db_session, sample_user, sample_cycle, tmp_path):
+    _create_paper_and_decision(db_session, sample_user.id, sample_cycle.id, "export", "HIGH", .8, "DELIVERED")
+    db_session.add(User(id="other", name="Other", access_token="other"))
+    db_session.commit()
+    result = export_pilot_dataset(db_session, export_dir=tmp_path, user_id=sample_user.id)
+    assert set(result.user_eligibility) == {sample_user.id}
+    assert result.is_reconciled
+
+
+def test_efficiency_filters_decisions_and_review_tasks_together(db_session, sample_user, sample_cycle):
+    sample_cycle.mode = "live"
+    sample_cycle.finished_at = datetime.now(timezone.utc)
+    first = _create_paper_and_decision(db_session, sample_user.id, sample_cycle.id, "first", "BORDERLINE", .4, "PENDING_REVIEW")
+    db_session.add(User(id="bot", name="Bot", is_simulated=True))
+    bot_cycle = Cycle(user_id="bot", mode="live", as_of_date="2026-10-21", finished_at=datetime.now(timezone.utc))
+    db_session.add(bot_cycle)
+    db_session.flush()
+    second = _create_paper_and_decision(db_session, "bot", bot_cycle.id, "second", "BORDERLINE", .4, "PENDING_REVIEW")
+    db_session.add_all([ReviewTask(decision_id=first.id, kind="borderline"), ReviewTask(decision_id=second.id, kind="borderline")])
+    db_session.commit()
+    result = calculate_operational_efficiency(db_session)
+    assert result.total_papers_scored == 1 and result.total_review_tasks_queued == 1
+    assert result.cycles_analyzed == 1
+
+
+def test_empty_survey_stats_and_identifier_validation(tmp_path):
+    assert compute_survey_statistics([])["n_responses"] == 0
+    with pytest.raises(ValueError, match="identifier"):
+        get_survey_path("../escape", tmp_path)

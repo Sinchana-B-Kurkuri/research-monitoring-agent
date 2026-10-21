@@ -18,6 +18,8 @@ Usage:
 """
 
 import argparse
+import hashlib
+import json
 from datetime import datetime, timezone
 import logging
 import os
@@ -76,7 +78,13 @@ def main():
         action="store_true",
         help="Skip figure PNG generation.",
     )
+    parser.add_argument("--results-dir", default="experiments/results")
+    parser.add_argument("--evaluator-user-id", default="developer")
     args = parser.parse_args()
+    global RESULTS_DIR
+    RESULTS_DIR = Path(args.results_dir)
+    import research_monitor.evaluation.experiments as experiment_module
+    experiment_module.RESULTS_DIR = RESULTS_DIR
 
     # Default to running all if none specified
     if not (args.all or args.e1 or args.e2 or args.e3 or args.e4 or args.e5 or args.e6):
@@ -145,13 +153,15 @@ def main():
 
     # Compute reference percentiles
     ref_scores = ref_embeddings @ seed_vec
-    t_high = float(np.percentile(ref_scores, config.PROVISIONAL_P_HIGH))
-    t_low = float(np.percentile(ref_scores, config.PROVISIONAL_P_LOW))
+    t_high = float(np.percentile(ref_scores, config.active_p_high))
+    t_low = float(np.percentile(ref_scores, config.active_p_low))
 
-    logger.info("Reference score cut points: t_high=%.4f (P%.1f), t_low=%.4f (P%.1f)", t_high, config.PROVISIONAL_P_HIGH, t_low, config.PROVISIONAL_P_LOW)
+    logger.info("Reference score cut points: t_high=%.4f (P%.1f), t_low=%.4f (P%.1f)", t_high, config.active_p_high, t_low, config.active_p_low)
 
     # Check for human labels
     labels_df = load_latest_labels()
+    if labels_df is not None and "user_id" in labels_df:
+        labels_df = labels_df[labels_df["user_id"] == args.evaluator_user_id]
     has_human_labels = labels_df is not None and len(labels_df) > 0
 
     gt_map = {}
@@ -159,7 +169,7 @@ def main():
         gt_map = dict(zip(labels_df["paper_id"].astype(str), labels_df["label"].astype(str)))
         logger.info("Found %d human ground-truth labels.", len(gt_map))
     elif args.simulated_oracle:
-        tmp_oracle = SimulationOracle(ground_truth_map={}, noise_rate=0.0)
+        tmp_oracle = SimulationOracle(ground_truth_map={}, noise_rate=0.0, allow_heuristic=True)
         gt_map = {
             str(r["paper_id"]): ("relevant" if tmp_oracle.evaluate_paper(str(r["paper_id"]), {"title": r["title"], "abstract": r["abstract"]}) == 1 else "not_relevant")
             for _, r in sample_df.iterrows()
@@ -168,12 +178,33 @@ def main():
     else:
         logger.warning("No human ground-truth labels found in data/labels/latest_labels.csv.")
 
+    missing_labels = set(sample_df["paper_id"].astype(str)) - set(gt_map)
+    if missing_labels:
+        if not args.simulated_oracle and (do_e1 or do_e2 or do_e3 or do_e4 or do_e6):
+            logger.error("BLOCKED: %d sample papers lack human labels. Complete labeling or use --simulated-oracle for explicitly heuristic simulations.", len(missing_labels))
+            return 2
+        if args.simulated_oracle:
+            synthetic = SimulationOracle(allow_heuristic=True)
+            for _, row in sample_df.iterrows():
+                pid = str(row["paper_id"])
+                if pid not in gt_map:
+                    gt_map[pid] = "relevant" if synthetic.evaluate_paper(pid, row.to_dict()) else "not_relevant"
+
     # Oracle setup
     oracle = SimulationOracle(ground_truth_map=gt_map if (has_human_labels or args.simulated_oracle) else None, noise_rate=0.0)
 
-    corpus_texts = (corpus_df["title"].fillna("") + " " + corpus_df["abstract"].fillna("")).tolist()[:2000]
+    corpus_texts = (corpus_df.loc[ref_mask, "title"].fillna("") + " " + corpus_df.loc[ref_mask, "abstract"].fillna("")).tolist()
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    manifest = {"generated_at": datetime.now(timezone.utc).isoformat(),
+        "sample_sha256": hashlib.sha256(sample_path.read_bytes()).hexdigest(),
+        "human_label_count": len(labels_df) if has_human_labels else 0,
+        "heuristic_label_count": len(missing_labels) if args.simulated_oracle else 0,
+        "is_simulated": bool(args.simulated_oracle),
+        "feedback_policy": "fixed C classifier at n>=30; production promotion guard is not simulated",
+        "f1_policy": "top 2 percent at matched unweighted delivery volume",
+        "e5_measurement": "theoretical token/cost assumptions", "e6_measurement": "ideal oracle review"}
+    (RESULTS_DIR / "run_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     completed_experiments = []
     blocked_experiments = []
 
@@ -187,7 +218,7 @@ def main():
             print(f"  [E1 STATUS] {msg}")
             blocked_experiments.append(("E1", msg))
         else:
-            sim_flag = not has_human_labels
+            sim_flag = bool(args.simulated_oracle)
             e1_labels = gt_map if has_human_labels else {
                 str(r["paper_id"]): ("relevant" if oracle.evaluate_paper(r["paper_id"], {"title": r["title"], "abstract": r["abstract"]}) == 1 else "not_relevant")
                 for _, r in sample_df.iterrows()
@@ -298,6 +329,8 @@ def main():
     # -------------------------------------------------------------------------
     if not args.no_figures:
         print("\n--- Generating Publication PNG Figures ---")
+        import scripts.generate_figures as figure_module
+        figure_module.RESULTS_DIR = RESULTS_DIR
         gen_figs = regenerate_all_figures()
         for f in gen_figs:
             print(f"  [FIGURE] Generated: {f}")

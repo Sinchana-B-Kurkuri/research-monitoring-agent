@@ -77,7 +77,7 @@ def apply_oracle_feedback(
         if labels_df is not None and len(labels_df) > 0:
             gt_map = dict(zip(labels_df["paper_id"].astype(str), labels_df["label"].astype(str)))
 
-        oracle = SimulationOracle(ground_truth_map=gt_map, noise_rate=noise_rate)
+        oracle = SimulationOracle(ground_truth_map=gt_map, noise_rate=noise_rate, allow_heuristic=True)
 
         # 1. Resolve target cycle
         user = session.get(User, user_id)

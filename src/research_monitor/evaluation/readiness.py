@@ -177,24 +177,18 @@ def check_pilot_readiness(
     test_labels_count = 0
     total_labels_count = 0
 
-    labels_df = load_latest_labels()
-    if labels_df is not None and not labels_df.empty:
-        stats = get_label_statistics(labels_df)
-        total_labels_count = stats.get("total_count", 0)
-        dev_labels_count = len(labels_df[labels_df["split"] == "dev"]) if "split" in labels_df.columns else 0
-        test_labels_count = len(labels_df[labels_df["split"] == "test"]) if "split" in labels_df.columns else 0
-    elif session is not None:
-        db_labels = session.query(ValidationLabel).all()
-        if db_labels:
-            ldf = pd.DataFrame([{"label": r.label, "split": r.split} for r in db_labels])
-            stats = get_label_statistics(ldf)
-            total_labels_count = len(db_labels)
-            dev_labels_count = sum(1 for r in db_labels if r.split == "dev")
-            test_labels_count = sum(1 for r in db_labels if r.split == "test")
-        else:
-            stats = get_label_statistics(pd.DataFrame())
+    if session is not None:
+        db_labels = session.query(ValidationLabel).filter_by(user_id="developer").all()
+        labels_df = pd.DataFrame([{"label": r.label, "split": r.split} for r in db_labels])
     else:
-        stats = get_label_statistics(pd.DataFrame())
+        labels_df = load_latest_labels()
+        if labels_df is None:
+            labels_df = pd.DataFrame()
+        elif "user_id" in labels_df:
+            labels_df = labels_df[labels_df["user_id"] == "developer"]
+    stats = get_label_statistics(labels_df)
+    total_labels_count = stats["total_count"]
+    dev_labels_count, test_labels_count = stats["dev_count"], stats["test_count"]
 
     labels_total_met = stats.get("target_overall_met", False)
     labels_test_met = stats.get("target_test_met", False)
@@ -212,7 +206,7 @@ def check_pilot_readiness(
     all_users = session.query(User).all() if session is not None else []
     total_users_with_records = len(all_users)
 
-    from research_monitor.evaluation.pilot_export import is_developer_user
+    from research_monitor.evaluation.pilot_export import is_developer_user, is_valid_live_cycle, pilot_user_evidence
 
     genuine_pilot_users: list[User] = []
     developer_users: list[User] = []
@@ -238,7 +232,7 @@ def check_pilot_readiness(
     genuine_uids = {u.id for u in genuine_pilot_users}
     genuine_cycles = [c for c in all_cycles if c.user_id in genuine_uids]
     genuine_recorded_cycles = len(genuine_cycles)
-    genuine_live_cycles = sum(1 for c in genuine_cycles if str(c.mode).lower() == "live")
+    genuine_live_cycles = sum(1 for c in genuine_cycles if is_valid_live_cycle(c))
     genuine_replay_cycles = sum(1 for c in genuine_cycles if str(c.mode).lower() == "replay")
     replay_cycles_count = sum(1 for c in all_cycles if str(c.mode).lower() == "replay")
 
@@ -259,27 +253,31 @@ def check_pilot_readiness(
     distinct_active_calendar_days = len(genuine_all_dates)
 
     # Distinct live calendar days
-    genuine_live_dates = sorted({d for d in (_extract_date(c) for c in genuine_cycles if str(c.mode).lower() == "live") if d is not None})
+    genuine_live_dates = sorted({d for d in (_extract_date(c) for c in genuine_cycles if is_valid_live_cycle(c)) if d is not None})
     distinct_live_calendar_days = len(genuine_live_dates)
 
     # Streak of genuine live daily cycles
     max_live_streak = 0
     h1_h2_eligible_count = 0
     user_eligibility_details = {}
+    completed_live_participants = 0
 
     for u in genuine_pilot_users:
         u_cycles = [c for c in genuine_cycles if c.user_id == u.id]
-        u_live_cycles = [c for c in u_cycles if str(c.mode).lower() == "live"]
+        evidence = pilot_user_evidence(session, u)
+        u_live_cycles = evidence["cycles"]
         live_streak = calculate_user_streak(u_live_cycles)
         max_live_streak = max(max_live_streak, live_streak)
 
         u_dates = {d for d in (_extract_date(c) for c in u_cycles) if d is not None}
-        n_days = len(u_dates)
+        n_days = evidence["active_days"]
 
-        fe_count = session.query(FeedbackEvent).filter_by(user_id=u.id).count() if session is not None else 0
+        fe_count = evidence["effective_labels"]
 
         # Section 8.6 criteria: >= 5 active days and >= 30 effective labels
-        is_eligible = (n_days >= 5) and (fe_count >= 30)
+        is_eligible = evidence["eligible"]
+        if live_streak >= 7 and is_eligible:
+            completed_live_participants += 1
         if is_eligible:
             h1_h2_eligible_count += 1
 
@@ -316,8 +314,11 @@ def check_pilot_readiness(
             f"{genuine_replay_cycles} replay cycles excluded from live count)"
         )
 
+    if completed_live_participants < genuine_pilot_users_count:
+        missing_prerequisites.append(f"Participants completing live streak and effective-label protocol: {completed_live_participants}/{genuine_pilot_users_count}")
+
     # 3. End-of-pilot surveys audit
-    surveys = load_all_surveys(survey_dir=survey_dir)
+    surveys = [survey for survey in load_all_surveys(survey_dir=survey_dir) if survey["user_id"] in genuine_uids]
     surveys_count = len(surveys)
     if surveys_count == 0:
         missing_prerequisites.append(
@@ -352,11 +353,20 @@ def check_pilot_readiness(
         and labels_test_met
         and genuine_pilot_users_count >= 3
         and max_live_streak >= 7
+        and completed_live_participants == genuine_pilot_users_count
+        and h1_h2_eligible_count == genuine_pilot_users_count
         and genuine_live_cycles >= 7
         and surveys_count >= genuine_pilot_users_count
     )
 
-    if all_criteria_met and final_report_path.exists() and final_tables_exist:
+    executed = False
+    if final_report_path.exists():
+        try:
+            previous = json.loads(final_report_path.read_text(encoding="utf-8"))
+            executed = previous.get("numbers_frozen") is True and (previous.get("e1_gate_quality") or {}).get("status") == "COMPLETED"
+        except (ValueError, OSError):
+            pass
+    if all_criteria_met and executed and final_tables_exist:
         current_tier = ReadinessTier.FINAL_EVALUATION_EXECUTED
     elif all_criteria_met:
         current_tier = ReadinessTier.FINAL_EVALUATION_READY

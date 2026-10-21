@@ -84,6 +84,7 @@ def run_experiment_e1_gate_quality(
     random_state: int = 42,
     corpus_texts: Optional[list[str]] = None,
     simulated: bool = False,
+    output_dir: Optional[Path | str] = None,
 ) -> pd.DataFrame:
     """
     E1 — Gate Quality (Roadmap Section 8.5):
@@ -102,23 +103,33 @@ def run_experiment_e1_gate_quality(
             "No human labels found in data/labels/latest_labels.csv."
         )
 
+    from research_monitor.evaluation.labeling import normalize_label
+    required = set(test_df["paper_id"].astype(str))
+    if dev_df is not None:
+        required.update(dev_df["paper_id"].astype(str))
+    missing = required - set(ground_truth_labels)
+    if missing:
+        raise BlockedExperimentError(f"Missing human labels for {len(missing)} requested papers; unknown labels cannot be treated as negatives.")
+    ground_truth_labels = {pid: normalize_label(ground_truth_labels[pid]) for pid in required}
+    if len(test_embeddings) != len(test_df):
+        raise ValueError("Test papers and embeddings are not aligned.")
     # Resolve test ground truth labels
     pids = test_df["paper_id"].astype(str).values
-    raw_labels = np.array([ground_truth_labels.get(pid, "not_relevant") for pid in pids])
+    raw_labels = np.array([ground_truth_labels[pid] for pid in pids])
     y_test = binary_map_labels(raw_labels)
-    weights = test_df["sampling_weight"].values if "sampling_weight" in test_df.columns else None
+    weights = test_df["sampling_weight"].values if "sampling_weight" in test_df.columns else np.ones(len(test_df))
 
     test_texts = (test_df["title"].fillna("") + " " + test_df["abstract"].fillna("")).tolist()
 
     # 1. Evaluate Gate (B2 embedding cosine with thresholds)
+    if len(np.unique(y_test)) < 2:
+        raise BlockedExperimentError("Test evaluation requires human labels from both binary classes.")
     gate_scores = score_embedding_b2(test_embeddings, seed_vector)
     high_mask = gate_scores >= t_high
     low_mask = gate_scores <= t_low
     border_mask = ~high_mask & ~low_mask
 
     target_volume = int(np.sum(high_mask))
-    if target_volume == 0:
-        target_volume = max(1, int(0.05 * len(test_df)))
 
     gate_prec = float(weighted_precision(y_test, high_mask, weights))
     gate_rec = float(weighted_recall(y_test, high_mask, weights))
@@ -154,7 +165,7 @@ def run_experiment_e1_gate_quality(
     b0_roc_auc = float(roc_auc_score(y_test, b0_scores, sample_weight=weights))
 
     # 3. Baseline B1: TF-IDF cosine similarity to seed interest text
-    all_texts = (corpus_texts or []) + test_texts
+    all_texts = corpus_texts or ((dev_df["title"] + " " + dev_df["abstract"]).tolist() if dev_df is not None and len(dev_df) else [config.SEED_INTEREST])
     b1_scores = score_tfidf_b1(all_texts, test_texts, config.SEED_INTEREST)
     b1_res = evaluate_at_matched_volume(b1_scores, y_test, target_volume=target_volume, weights=weights)
     b1_pr_auc = float(weighted_pr_auc(y_test, b1_scores, weights))
@@ -270,9 +281,17 @@ def run_experiment_e1_gate_quality(
         },
     ]
 
+    for record, scores in zip(records, [gate_scores, b0_scores, b1_scores, gate_scores, b4_scores if dev_df is not None and len(dev_df) else None]):
+        if scores is not None and pd.isna(record["pr_auc_ci_lower"]):
+            baseline_df = eval_df.assign(score=scores)
+            lower, upper = stratified_bootstrap_ci(baseline_df, _calc_pr_auc, n_resamples=n_resamples, seed=random_state)
+            record["pr_auc_ci_lower"], record["pr_auc_ci_upper"] = lower, upper
+        record["test_sample_count"] = len(test_df)
+        record["label_source"] = "simulated" if simulated else "human"
     df_out = pd.DataFrame(records)
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    out_csv = RESULTS_DIR / "e1_gate_quality.csv"
+    target_dir = Path(output_dir) if output_dir is not None else RESULTS_DIR
+    target_dir.mkdir(parents=True, exist_ok=True)
+    out_csv = target_dir / "e1_gate_quality.csv"
     df_out.to_csv(out_csv, index=False)
     logger.info("Saved E1 Gate Quality results to %s", out_csv)
     return df_out
@@ -294,6 +313,7 @@ def run_experiment_e2_learning_curves(
     feedback_sizes: Sequence[int] = SIMULATION_FEEDBACK_SIZES,
     random_seeds: Sequence[int] = DEFAULT_RANDOM_SEEDS,
     corpus_texts: Optional[list[str]] = None,
+    output_dir: Optional[Path | str] = None,
 ) -> pd.DataFrame:
     """
     E2 — Learning Curves under Protocols A and B (Roadmap Section 8.5).
@@ -354,8 +374,9 @@ def run_experiment_e2_learning_curves(
         rows.append(d)
 
     df_out = pd.DataFrame(rows)
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    out_csv = RESULTS_DIR / "e2_learning_curves.csv"
+    target_dir = Path(output_dir) if output_dir is not None else RESULTS_DIR
+    target_dir.mkdir(parents=True, exist_ok=True)
+    out_csv = target_dir / "e2_learning_curves.csv"
     df_out.to_csv(out_csv, index=False)
     logger.info("Saved E2 Learning Curves results to %s", out_csv)
     return df_out
@@ -376,6 +397,7 @@ def run_experiment_e3_signal_ablation(
     t_low: float,
     feedback_sizes: Sequence[int] = (10, 20, 30, 50),
     random_seeds: Sequence[int] = DEFAULT_RANDOM_SEEDS,
+    output_dir: Optional[Path | str] = None,
 ) -> pd.DataFrame:
     """
     E3 — Signal Ablation (Roadmap Section 8.5):
@@ -408,8 +430,9 @@ def run_experiment_e3_signal_ablation(
             rows.append(pt)
 
     df_out = pd.DataFrame(rows)
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    out_csv = RESULTS_DIR / "e3_signal_ablation.csv"
+    target_dir = Path(output_dir) if output_dir is not None else RESULTS_DIR
+    target_dir.mkdir(parents=True, exist_ok=True)
+    out_csv = target_dir / "e3_signal_ablation.csv"
     df_out.to_csv(out_csv, index=False)
     logger.info("Saved E3 Signal Ablation results to %s", out_csv)
     return df_out
@@ -428,6 +451,7 @@ def run_experiment_e4_centroid_update(
     oracle: SimulationOracle,
     feedback_sizes: Sequence[int] = (10, 20, 30, 50),
     random_seeds: Sequence[int] = DEFAULT_RANDOM_SEEDS,
+    output_dir: Optional[Path | str] = None,
 ) -> pd.DataFrame:
     """
     E4 — Centroid Update (Roadmap Section 8.5):
@@ -441,7 +465,7 @@ def run_experiment_e4_centroid_update(
         sample_count=len(test_df),
     )
 
-    test_weights = test_df["sampling_weight"].values if "sampling_weight" in test_df.columns else None
+    test_weights = test_df["sampling_weight"].values if "sampling_weight" in test_df.columns else np.ones(len(test_df))
 
     # Derive test ground truth labels
     y_test = np.array([
@@ -458,7 +482,7 @@ def run_experiment_e4_centroid_update(
     b2_scores = score_embedding_b2(test_embeddings, seed_vector)
     b2_pr_auc = float(weighted_pr_auc(y_test, b2_scores, test_weights))
     b2_roc_auc = float(roc_auc_score(y_test, b2_scores, sample_weight=test_weights))
-    b2_f1 = float(weighted_f1(y_test, b2_scores >= 0.5, test_weights))
+    b2_f1 = float(evaluate_at_matched_volume(b2_scores, y_test, max(1, round(.02 * len(y_test))), test_weights)["f1"])
 
     rows = []
     # Add B2 baseline row
@@ -497,7 +521,7 @@ def run_experiment_e4_centroid_update(
             b3_scores = score_centroid_b3(test_embeddings, centroid)
             b3_pr_aucs.append(float(weighted_pr_auc(y_test, b3_scores, test_weights)))
             b3_roc_aucs.append(float(roc_auc_score(y_test, b3_scores, sample_weight=test_weights)))
-            b3_f1s.append(float(weighted_f1(y_test, b3_scores >= 0.5, test_weights)))
+            b3_f1s.append(float(evaluate_at_matched_volume(b3_scores, y_test, max(1, round(.02 * len(y_test))), test_weights)["f1"]))
 
             # B5 Classifier
             b5_scores = train_and_score_embedding_logreg_b5(
@@ -505,7 +529,7 @@ def run_experiment_e4_centroid_update(
             )
             b5_pr_aucs.append(float(weighted_pr_auc(y_test, b5_scores, test_weights)))
             b5_roc_aucs.append(float(roc_auc_score(y_test, b5_scores, sample_weight=test_weights)))
-            b5_f1s.append(float(weighted_f1(y_test, b5_scores >= 0.5, test_weights)))
+            b5_f1s.append(float(evaluate_at_matched_volume(b5_scores, y_test, max(1, round(.02 * len(y_test))), test_weights)["f1"]))
 
         rows.append({
             "feedback_size": n,
@@ -532,8 +556,9 @@ def run_experiment_e4_centroid_update(
         })
 
     df_out = pd.DataFrame(rows)
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    out_csv = RESULTS_DIR / "e4_centroid_update.csv"
+    target_dir = Path(output_dir) if output_dir is not None else RESULTS_DIR
+    target_dir.mkdir(parents=True, exist_ok=True)
+    out_csv = target_dir / "e4_centroid_update.csv"
     df_out.to_csv(out_csv, index=False)
     logger.info("Saved E4 Centroid Update results to %s", out_csv)
     return df_out
@@ -552,6 +577,7 @@ def run_experiment_e5_efficiency(
     avg_tokens_per_summary: int = 150,
     cost_per_1m_input_usd: float = 0.075,
     cost_per_1m_output_usd: float = 0.30,
+    output_dir: Optional[Path | str] = None,
 ) -> pd.DataFrame:
     """
     E5 — Efficiency (Roadmap Section 8.5):
@@ -559,6 +585,8 @@ def run_experiment_e5_efficiency(
     review workload, and sensitivity to percentile levels.
     """
     n_total = len(scores)
+    if n_total == 0:
+        raise ValueError("Efficiency experiment requires candidate scores.")
     rows = []
 
     # Summarize everything baseline
@@ -595,6 +623,9 @@ def run_experiment_e5_efficiency(
         rows.append({
             "p_high": p_high,
             "p_low": p_low,
+            "measurement_type": "theoretical_counterfactual",
+            "assumed_input_tokens": avg_tokens_per_abstract,
+            "assumed_output_tokens": avg_tokens_per_summary,
             "t_high": t_high,
             "t_low": t_low,
             "total_papers_scored": n_total,
@@ -612,8 +643,9 @@ def run_experiment_e5_efficiency(
         })
 
     df_out = pd.DataFrame(rows)
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    out_csv = RESULTS_DIR / "e5_efficiency.csv"
+    target_dir = Path(output_dir) if output_dir is not None else RESULTS_DIR
+    target_dir.mkdir(parents=True, exist_ok=True)
+    out_csv = target_dir / "e5_efficiency.csv"
     df_out.to_csv(out_csv, index=False)
     logger.info("Saved E5 Efficiency results to %s", out_csv)
     return df_out
@@ -631,6 +663,7 @@ def run_experiment_e6_human_review_value(
     weights: Optional[np.ndarray] = None,
     oracle: Optional[SimulationOracle] = None,
     paper_ids: Optional[Sequence[str]] = None,
+    output_dir: Optional[Path | str] = None,
 ) -> pd.DataFrame:
     """
     E6 — Human-Review Value (Roadmap Section 8.5):
@@ -708,8 +741,11 @@ def run_experiment_e6_human_review_value(
     ]
 
     df_out = pd.DataFrame(rows)
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    out_csv = RESULTS_DIR / "e6_human_review_value.csv"
+    df_out["is_simulated"] = True
+    df_out["measurement_type"] = "ideal_oracle_review"
+    target_dir = Path(output_dir) if output_dir is not None else RESULTS_DIR
+    target_dir.mkdir(parents=True, exist_ok=True)
+    out_csv = target_dir / "e6_human_review_value.csv"
     df_out.to_csv(out_csv, index=False)
     logger.info("Saved E6 Human Review Value results to %s", out_csv)
     return df_out

@@ -180,6 +180,7 @@ def main():
         help="Skip E1 Gate Quality offline calculation.",
     )
 
+    parser.add_argument("--simulations", action="store_true", help="Also execute E2-E6 from complete human-labeled inputs.")
     args = parser.parse_args()
 
     results_dir = Path(args.results_dir)
@@ -192,10 +193,13 @@ def main():
         survey_dir=survey_dir,
         results_dir=results_dir,
         run_offline_e1=not args.skip_e1,
+        run_offline_simulations=args.simulations,
     )
 
     if args.figures:
         print("\nRegenerating publication PNG figures...")
+        import scripts.generate_figures as figure_module
+        figure_module.RESULTS_DIR = results_dir
         figs = regenerate_all_figures()
         print(f"Generated {len(figs)} figures under {results_dir}")
 

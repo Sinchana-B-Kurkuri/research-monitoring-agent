@@ -106,7 +106,10 @@ def run_experiment_e7_pilot(
             logger.warning("Could not read audit log: %s", e)
 
     # 1. Survey evaluation (H3)
-    surveys = load_all_surveys(survey_dir=survey_dir)
+    surveys = [survey for survey in load_all_surveys(survey_dir=survey_dir)
+        if survey["user_id"] in audit_log.get("user_eligibility", {})
+        and not audit_log["user_eligibility"][survey["user_id"]].get("is_developer")
+        and not audit_log["user_eligibility"][survey["user_id"]].get("is_simulated")]
     h3_stats = compute_survey_statistics(surveys)
 
     # 2. Section 8.6 eligibility and adaptation analysis
@@ -247,12 +250,14 @@ def run_final_evaluation_suite(
         readiness = check_pilot_readiness(
             session=db_session,
             survey_dir=survey_dir,
+            results_dir=res_dir,
         )
     else:
         with get_db_session() as session:
             readiness = check_pilot_readiness(
                 session=session,
                 survey_dir=survey_dir,
+                results_dir=res_dir,
             )
     readiness_report_path = res_dir / "readiness_report.json"
     with open(readiness_report_path, "w", encoding="utf-8") as f:
@@ -283,100 +288,68 @@ def run_final_evaluation_suite(
     # -------------------------------------------------------------
     # Step 3: E1 Gate Quality on Frozen Test Split
     # -------------------------------------------------------------
-    e1_results: Optional[Dict[str, Any]] = None
-    if run_offline_e1:
-        logger.info("Running Step 3: E1 Gate Quality on frozen test split...")
-        sample_path = Path("data/evaluation_sample.parquet")
-        corpus_path = Path("data/corpus.parquet")
-        emb_path = Path("data/embeddings.npy")
-        labels_df = load_latest_labels()
-
-        if sample_path.exists():
-            try:
-                sample_df = pd.read_parquet(sample_path)
-                test_mask = (sample_df["split"] == "test").values
-                dev_mask = (sample_df["split"] == "dev").values
-                test_df = sample_df[test_mask].reset_index(drop=True)
-                dev_df = sample_df[dev_mask].reset_index(drop=True)
-
-                if "embedding" in test_df.columns:
-                    test_embeddings = np.vstack(test_df["embedding"].values).astype(np.float32)
-                    corpus_texts = []
-                    t_high = config.DEFAULT_T_HIGH
-                    t_low = config.DEFAULT_T_LOW
-                elif corpus_path.exists() and emb_path.exists():
-                    corpus_df = pd.read_parquet(corpus_path)
-                    all_embs = np.load(emb_path)
-                    corpus_pid_to_idx = {str(pid): i for i, pid in enumerate(corpus_df["paper_id"].values)}
-                    test_indices = [
-                        corpus_pid_to_idx[str(pid)]
-                        for pid in test_df["paper_id"].values
-                        if str(pid) in corpus_pid_to_idx
-                    ]
-                    test_embeddings = all_embs[test_indices]
-                    corpus_texts = (corpus_df["title"].fillna("") + " " + corpus_df["abstract"].fillna("")).tolist()[:2000]
-
-                    ref_mask = corpus_df["is_reference"].values
-                    seed_vector = _compute_seed_vector()
-                    ref_scores = all_embs[ref_mask] @ seed_vector
-                    t_high = float(np.percentile(ref_scores, config.PROVISIONAL_P_HIGH))
-                    t_low = float(np.percentile(ref_scores, config.PROVISIONAL_P_LOW))
-                else:
-                    test_embeddings = None
-                    corpus_texts = []
-                    t_high = config.DEFAULT_T_HIGH
-                    t_low = config.DEFAULT_T_LOW
-
-                gt_map = {}
-                if labels_df is not None and len(labels_df) > 0:
-                    gt_map = dict(zip(labels_df["paper_id"].astype(str), labels_df["label"].astype(str)))
-
-                test_pids = set(test_df["paper_id"].astype(str))
-                test_overlap = sum(1 for pid in test_pids if pid in gt_map and gt_map[pid] in ("relevant", "1", 1))
-
-                if test_embeddings is None:
-                    e1_results = {
-                        "status": "BLOCKED_NO_EMBEDDINGS",
-                        "message": "Embeddings could not be loaded or aligned for the test split.",
-                    }
-                elif test_overlap < 30:  # Roadmap requirement: >= 30 relevant test labels
-                    e1_results = {
-                        "status": "BLOCKED_INSUFFICIENT_TEST_LABELS",
-                        "message": (
-                            f"Test split requires >= 30 ground truth human labels (found {test_overlap}). "
-                            "E1 final numbers are held until labeling completes."
-                        ),
-                        "labeled_overlap": test_overlap,
-                    }
-                else:
-                    seed_vector = _compute_seed_vector()
-                    e1_df = run_experiment_e1_gate_quality(
-                        test_df=test_df,
-                        test_embeddings=test_embeddings,
-                        seed_vector=seed_vector,
-                        ground_truth_labels=gt_map,
-                        dev_df=dev_df,
-                        t_high=t_high,
-                        t_low=t_low,
-                        corpus_texts=corpus_texts,
-                        simulated=False,
-                    )
-                    e1_csv_path = res_dir / "final_e1_gate_quality.csv"
-                    e1_df.to_csv(e1_csv_path, index=False)
-                    e1_results = {
-                        "status": "COMPLETED",
-                        "test_sample_count": len(test_df),
-                        "labeled_overlap": test_overlap,
-                        "output_csv": str(e1_csv_path),
-                    }
-            except Exception as e:
-                logger.warning("Error running E1 Gate Quality: %s", e)
-                e1_results = {"status": "ERROR", "error": str(e)}
-        else:
-            e1_results = {
-                "status": "BLOCKED_NO_EVALUATION_SAMPLE",
-                "message": f"Sample file {sample_path} not found.",
-            }
+    e1_results = None
+    simulation_results = {"status": "NOT_REQUESTED"}
+    if run_offline_e1 or run_offline_simulations:
+        try:
+            sample_path = Path("data/evaluation_sample.parquet")
+            sample_df = pd.read_parquet(sample_path)
+            labels_df = load_latest_labels()
+            if labels_df is not None and "user_id" in labels_df:
+                labels_df = labels_df[labels_df["user_id"] == "developer"]
+            gt_map = dict(zip(labels_df["paper_id"].astype(str), labels_df["label"])) if labels_df is not None else {}
+            missing = set(sample_df["paper_id"].astype(str)) - set(gt_map)
+            if missing:
+                raise BlockedExperimentError(f"{len(missing)} of {len(sample_df)} frozen sample papers lack human labels. Final evaluation is held; missing labels are not negatives.")
+            corpus_df = pd.read_parquet("data/corpus.parquet")
+            all_embs = np.load("data/embeddings.npy", allow_pickle=False)
+            if len(all_embs) != len(corpus_df):
+                raise ValueError("Corpus and embeddings are not aligned.")
+            lookup = {str(pid): i for i, pid in enumerate(corpus_df["paper_id"])}
+            sample_embeddings = all_embs[[lookup[str(pid)] for pid in sample_df["paper_id"]]]
+            dev_mask = (sample_df["split"] == "dev").values
+            test_mask = (sample_df["split"] == "test").values
+            dev_df = sample_df[dev_mask].reset_index(drop=True)
+            test_df = sample_df[test_mask].reset_index(drop=True)
+            dev_embeddings, test_embeddings = sample_embeddings[dev_mask], sample_embeddings[test_mask]
+            seed_vector = _compute_seed_vector()
+            ref_mask = corpus_df["is_reference"].values
+            ref_scores = all_embs[ref_mask] @ seed_vector
+            t_high, t_low = np.percentile(ref_scores, [config.active_p_high, config.active_p_low])
+            corpus_texts = (corpus_df.loc[ref_mask, "title"] + " " + corpus_df.loc[ref_mask, "abstract"]).tolist()
+            if sum(gt_map[str(pid)] == "relevant" for pid in test_df["paper_id"]) < 30:
+                raise BlockedExperimentError("Frozen test split requires at least 30 relevant human labels.")
+            if run_offline_e1:
+                table = run_experiment_e1_gate_quality(test_df, test_embeddings, seed_vector,
+                    ground_truth_labels=gt_map, dev_df=dev_df, t_high=t_high, t_low=t_low,
+                    corpus_texts=corpus_texts, output_dir=res_dir)
+                path = res_dir / "final_e1_gate_quality.csv"
+                table.to_csv(path, index=False)
+                e1_results = {"status": "COMPLETED", "test_sample_count": len(test_df),
+                    "labeled_overlap": len(test_df), "output_csv": str(path)}
+            if run_offline_simulations:
+                from research_monitor.evaluation import experiments as exp
+                from research_monitor.evaluation.simulation import SimulationOracle
+                oracle = SimulationOracle(ground_truth_map=gt_map)
+                common = dict(dev_df=dev_df, dev_embeddings=dev_embeddings, test_df=test_df,
+                    test_embeddings=test_embeddings, seed_vector=seed_vector, oracle=oracle, output_dir=res_dir)
+                exp.run_experiment_e2_learning_curves(**common, t_high=t_high, t_low=t_low, corpus_texts=corpus_texts)
+                exp.run_experiment_e3_signal_ablation(**common, t_high=t_high, t_low=t_low)
+                exp.run_experiment_e4_centroid_update(**common)
+                exp.run_experiment_e5_efficiency(test_embeddings @ seed_vector, output_dir=res_dir)
+                exp.run_experiment_e6_human_review_value(test_embeddings @ seed_vector,
+                    np.array([int(gt_map[str(pid)] == "relevant") for pid in test_df["paper_id"]]),
+                    t_high, t_low, weights=test_df["sampling_weight"].values,
+                    oracle=oracle, paper_ids=test_df["paper_id"].astype(str).tolist(), output_dir=res_dir)
+                simulation_results = {"status": "COMPLETED", "is_simulated": True}
+        except (BlockedExperimentError, FileNotFoundError) as exc:
+            result = {"status": "BLOCKED_INCOMPLETE_DATA", "message": str(exc)}
+            e1_results = result if run_offline_e1 else None
+            simulation_results = result if run_offline_simulations else simulation_results
+        except Exception as exc:
+            result = {"status": "ERROR", "error": str(exc)}
+            e1_results = result if run_offline_e1 else None
+            simulation_results = result if run_offline_simulations else simulation_results
 
     # -------------------------------------------------------------
     # Step 4: E7 Pilot Evaluation (Hypotheses H1-H3)
@@ -435,16 +408,18 @@ def run_final_evaluation_suite(
     # -------------------------------------------------------------
     # Step 7: Master Deliverable Report
     # -------------------------------------------------------------
+    numbers_frozen = readiness.can_freeze_final_numbers and bool(e1_results and e1_results.get("status") == "COMPLETED") and (not run_offline_simulations or simulation_results.get("status") == "COMPLETED")
     report = {
         "phase": 13,
         "title": "Phase 13 Pilot Completion and Final Evaluation Report",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "readiness": readiness.to_dict(),
-        "numbers_frozen": readiness.can_freeze_final_numbers,
+        "numbers_frozen": numbers_frozen,
         "completion_status": (
-            "COMPLETE" if readiness.can_freeze_final_numbers else "IN_PROGRESS_PARTIAL_DATA"
+            "COMPLETE" if numbers_frozen else "IN_PROGRESS_PARTIAL_DATA"
         ),
         "e1_gate_quality": e1_results,
+        "offline_simulations": simulation_results,
         "e7_pilot_evaluation": e7_results,
         "adaptation_analysis": adaptation_results,
         "efficiency_analysis": efficiency_results,

@@ -17,6 +17,7 @@ H3 criterion:
 
 from datetime import datetime, timezone
 import json
+import re
 import logging
 from pathlib import Path
 from typing import Any, Optional
@@ -88,7 +89,10 @@ def validate_survey_dict(data: dict[str, Any]) -> tuple[bool, Optional[str]]:
 def get_survey_path(user_id: str, survey_dir: Path | str = DEFAULT_SURVEY_DIR) -> Path:
     """Return path to a specific user's survey JSON file."""
     s_dir = Path(survey_dir)
-    return s_dir / f"{str(user_id).strip()}_survey.json"
+    identifier = str(user_id).strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", identifier):
+        raise ValueError("Invalid survey user identifier.")
+    return s_dir / f"{identifier}_survey.json"
 
 
 def save_survey(
@@ -204,6 +208,11 @@ def compute_survey_statistics(surveys: list[dict[str, Any]]) -> dict[str, Any]:
     if not surveys:
         return {
             "total_surveys": 0,
+            "n_responses": 0,
+            "median_usefulness": None,
+            "median_summary_helpfulness": None,
+            "mean_triage_time_minutes": None,
+            "status": "PENDING",
             "usefulness_median": None,
             "usefulness_mean": None,
             "summary_helpfulness_median": None,

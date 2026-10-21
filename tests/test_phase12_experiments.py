@@ -252,7 +252,7 @@ class TestSimulationOracle:
         assert oracle_noisy.get_reviewer_decision("p1") == "reject"
 
     def test_oracle_heuristic_fallback_when_ground_truth_absent(self):
-        oracle = SimulationOracle(ground_truth_map={}, noise_rate=0.0)
+        oracle = SimulationOracle(ground_truth_map={}, noise_rate=0.0, allow_heuristic=True)
         paper_agent = {
             "title": "LLM Agents for Multi-Agent Planning",
             "abstract": "We develop autonomous agent workflows using reinforcement learning.",

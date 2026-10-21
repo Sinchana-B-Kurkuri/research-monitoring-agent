@@ -507,6 +507,27 @@ class TestReadinessAndCompletionSafeguards:
         db_session.add_all(v_labels)
         db_session.commit()
 
+        for uid in ["user_alice", "user_bob", "user_carol"]:
+            if uid != "user_alice":
+                for day in range(7):
+                    ts = now - timedelta(days=day)
+                    db_session.add(Cycle(user_id=uid, mode="live", as_of_date=ts.strftime("%Y-%m-%d"),
+                        started_at=ts, finished_at=ts, counts={"status": "success"}))
+            db_session.flush()
+            cycle = db_session.query(Cycle).filter_by(user_id=uid, mode="live").first()
+            for i in range(1, 31):
+                pid = f"2401.{i:05d}"
+                decision = db_session.query(RoutingDecision).filter_by(user_id=uid, paper_id=pid).first()
+                if decision is None:
+                    decision = RoutingDecision(user_id=uid, paper_id=pid, cycle_id=cycle.id,
+                        vector_version_id=1, cosine_score=.8, route="HIGH", status="DELIVERED",
+                        thresholds_used={}, reason="Readiness fixture", created_at=now)
+                    db_session.add(decision)
+                    db_session.flush()
+                db_session.add(FeedbackEvent(user_id=uid, paper_id=pid, decision_id=decision.id,
+                    source="user", label=1, created_at=now))
+        db_session.commit()
+
         # Add survey responses for all 3 participants
         s_dir = tmp_path / "surveys"
         for uid in ["user_alice", "user_bob", "user_carol", "developer"]:

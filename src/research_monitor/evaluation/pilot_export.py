@@ -61,6 +61,36 @@ def is_developer_user(user: User) -> bool:
     )
 
 
+def is_valid_live_cycle(cycle):
+    """Empty successful days count; unfinished/error/replay days do not."""
+    counts = cycle.counts or {}
+    return cycle.mode == "live" and cycle.finished_at is not None and not counts.get("error") and counts.get("status") != "failure"
+
+
+def pilot_user_evidence(session, user):
+    """One eligibility contract shared by readiness and export."""
+    def utc(dt):
+        return dt.replace(tzinfo=timezone.utc) if dt and dt.tzinfo is None else dt
+    profile = session.query(InterestProfile).filter_by(user_id=user.id).order_by(InterestProfile.created_at).first()
+    onboard = utc(profile.created_at if profile else user.created_at)
+    cycles = [c for c in session.query(Cycle).filter_by(user_id=user.id) if is_valid_live_cycle(c)]
+    cycle_ids = {c.id for c in cycles}
+    eligible_papers = {d.paper_id for d in session.query(RoutingDecision).filter_by(user_id=user.id)
+        if d.cycle_id in cycle_ids and utc(d.created_at) >= onboard}
+    events = [e for e in session.query(FeedbackEvent).filter_by(user_id=user.id).order_by(FeedbackEvent.created_at, FeedbackEvent.id)
+        if utc(e.created_at) >= onboard and e.paper_id in eligible_papers and e.source in {"user", "reviewer"}]
+    chosen = {}
+    for event in events:
+        old = chosen.get(event.paper_id)
+        if old is None or event.source == "user" or old.source != "user":
+            chosen[event.paper_id] = event
+    dates = {c.started_at.date() for c in cycles if c.started_at}
+    dates.update(e.created_at.date() for e in events)
+    return {"cycles": cycles, "events": events, "effective": chosen,
+        "active_days": len(dates), "effective_labels": len(chosen),
+        "eligible": len(dates) >= 5 and len(chosen) >= 30}
+
+
 def categorize_record(
     is_sim: bool,
     is_dev: bool,
@@ -124,7 +154,10 @@ def export_pilot_dataset(
     out_dir = Path(target_path)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    users = session.query(User).order_by(User.id).all()
+    user_query = session.query(User)
+    if user_id is not None:
+        user_query = user_query.filter(User.id == user_id)
+    users = user_query.order_by(User.id).all()
 
     # Pre-fetch paper titles
     papers_map = {p.id: p.title for p in session.query(Paper.id, Paper.title).all()}
@@ -164,7 +197,7 @@ def export_pilot_dataset(
             .order_by(ModelVersion.version.asc())
             .all()
         )
-        promoted_models = [m for m in model_versions if m.promoted and m.is_active]
+        promoted_models = [m for m in model_versions if m.promoted]
         model_activation_dt = promoted_models[0].trained_at if promoted_models else None
 
         # 4. Cycles
@@ -214,46 +247,13 @@ def export_pilot_dataset(
         )
         summary_by_decision_id = {s.decision_id: s for s in summaries}
 
-        # 9. Compute active days and effective labels
-        active_dates = set()
-        for c in cycles:
-            if c.started_at:
-                active_dates.add(c.started_at.date())
-        for fe in feedback_events:
-            if fe.created_at:
-                active_dates.add(fe.created_at.date())
-        for rt in review_tasks:
-            if rt.decided_at:
-                active_dates.add(rt.decided_at.date())
-
-        # Effective labels calculation (Section 7.3)
-        effective_labels_dict: dict[str, tuple[int, str]] = {}
-        all_pids = set(user_feedback_by_pid.keys()) | {
-            rt.routing_decision.paper_id for rt in review_tasks if rt.routing_decision
-        }
-
-        for pid in all_pids:
-            fe_list = user_feedback_by_pid.get(pid, [])
-            user_fe = [e for e in fe_list if e.source == "user"]
-            reviewer_fe = [e for e in fe_list if e.source == "reviewer"]
-
-            if user_fe:
-                # Latest user like/dislike takes precedence
-                effective_labels_dict[pid] = (int(user_fe[-1].label), "user")
-            elif reviewer_fe:
-                effective_labels_dict[pid] = (int(reviewer_fe[-1].label), "reviewer")
-            else:
-                # Check review task decision directly if no feedback_event was logged
-                matching_task = next(
-                    (rt for rt in review_tasks if rt.routing_decision and rt.routing_decision.paper_id == pid),
-                    None,
-                )
-                if matching_task and matching_task.decision in {"accept", "reject"}:
-                    lbl = 1 if matching_task.decision == "accept" else 0
-                    effective_labels_dict[pid] = (lbl, "reviewer")
-
-        n_effective_labels = len(effective_labels_dict)
-        n_active_days = len(active_dates)
+        evidence = pilot_user_evidence(session, user)
+        effective_labels_dict = {pid: (int(event.label), event.source) for pid, event in evidence["effective"].items()}
+        n_effective_labels = evidence["effective_labels"]
+        n_active_days = evidence["active_days"]
+        eligible_event_ids = {e.id for e in evidence["events"]}
+        user_feedback_by_pid = {pid: [e for e in events if e.id in eligible_event_ids]
+            for pid, events in user_feedback_by_pid.items()}
 
         # Section 8.6 Exclusion Rule: users with < 5 active days or < 30 effective labels
         # are excluded from H1/H2 (but kept for H3 survey analysis)
@@ -291,16 +291,9 @@ def export_pilot_dataset(
             cycle_mode = cycle.mode if cycle else "unknown"
             cycle_date = cycle.as_of_date if cycle else None
 
-            # Outage detection: cycle error or 0 discovered when mode is live
-            is_outage = False
-            if cycle and cycle.counts and isinstance(cycle.counts, dict):
-                discovered = cycle.counts.get("discovered", 0)
-                total_routed = cycle.counts.get(
-                    "total_routed",
-                    sum(v for v in cycle.counts.values() if isinstance(v, (int, float))),
-                )
-                if cycle.counts.get("error") or (discovered == 0 and total_routed == 0):
-                    is_outage = True
+            # An empty successful day is valid, not an outage. It has no
+            # decision rows, but remains available in cycle readiness telemetry.
+            is_outage = bool(cycle and (cycle.finished_at is None or (cycle.counts or {}).get("error") or (cycle.counts or {}).get("status") == "failure"))
 
             # Pre-onboarding detection
             is_pre_onboard = False
@@ -404,7 +397,7 @@ def export_pilot_dataset(
                 "model_activation_date": model_activation_dt.isoformat() if model_activation_dt else None,
                 "is_outage": is_outage,
                 "is_pre_onboard": is_pre_onboard,
-                "excluded_from_h1_h2": not meets_h1_h2 or is_outage or is_pre_onboard or is_dev or is_sim,
+                "excluded_from_h1_h2": not meets_h1_h2 or is_outage or is_pre_onboard or is_dev or is_sim or cycle_mode != "live",
                 "exclusion_reasons": "; ".join(rec_exclusions) if rec_exclusions else "none",
                 "created_at": dec.created_at.isoformat() if dec.created_at else None,
             }
@@ -467,7 +460,11 @@ def export_pilot_dataset(
     ) if not df_records.empty else 0
     excluded_count = int(df_records["excluded_from_h1_h2"].sum()) if not df_records.empty else 0
 
-    partition_sum = clean_count + genuine_replay_count + dev_count + sim_count + outage_count + pre_onboard_count
+    # Terminal exclusion buckets are disjoint from developer/simulation/replay.
+    live_nonpilot = df_records[(df_records["data_category"] == "LIVE_PILOT")] if not df_records.empty else pd.DataFrame()
+    outage_count = int(live_nonpilot["is_outage"].sum()) if not live_nonpilot.empty else 0
+    pre_onboard_count = int((~live_nonpilot["is_outage"] & live_nonpilot["is_pre_onboard"]).sum()) if not live_nonpilot.empty else 0
+    partition_sum = clean_count + genuine_replay_count + int((df_records["data_category"] == "DEVELOPER_PILOT").sum()) + sim_count + outage_count + pre_onboard_count if not df_records.empty else 0
     is_reconciled = bool(partition_sum == len(df_records))
 
     # User eligibility dictionary

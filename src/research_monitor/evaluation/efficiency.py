@@ -100,6 +100,8 @@ def calculate_operational_efficiency(
     export_dfs: Optional[Dict[str, pd.DataFrame]] = None,
     user_id: Optional[str] = None,
     exclude_developer: bool = True,
+    live_only: bool = True,
+    exclude_simulated: bool = True,
     cost_per_1m_input_usd: float = DEFAULT_COST_PER_1M_INPUT_USD,
     cost_per_1m_output_usd: float = DEFAULT_COST_PER_1M_OUTPUT_USD,
 ) -> EfficiencySummary:
@@ -121,6 +123,7 @@ def calculate_operational_efficiency(
             RoutingDecision.route,
             RoutingDecision.status,
             RoutingDecision.created_at,
+            RoutingDecision.reason,
         )
         if user_id:
             q_decisions = q_decisions.filter(RoutingDecision.user_id == user_id)
@@ -132,6 +135,7 @@ def calculate_operational_efficiency(
                 "route": d.route,
                 "status": d.status,
                 "created_at": d.created_at,
+                "reason": d.reason,
             }
             for d in q_decisions.all()
         ])
@@ -184,14 +188,15 @@ def calculate_operational_efficiency(
             for t in q_tasks.all()
         ])
 
-        q_cycles = session.query(Cycle.id, Cycle.user_id, Cycle.as_of_date, Cycle.mode)
+        q_cycles = session.query(Cycle.id, Cycle.user_id, Cycle.as_of_date, Cycle.mode, Cycle.finished_at, Cycle.counts)
         cycles_df = pd.DataFrame([
-            {"id": c.id, "user_id": c.user_id, "as_of_date": c.as_of_date, "mode": c.mode}
+            {"id": c.id, "user_id": c.user_id, "as_of_date": c.as_of_date, "mode": c.mode, "finished_at": c.finished_at, "counts": c.counts}
             for c in q_cycles.all()
         ])
 
-        q_users = session.query(User.id, User.is_simulated)
-        users_df = pd.DataFrame([{"id": u.id, "is_simulated": u.is_simulated} for u in q_users.all()])
+        from research_monitor.evaluation.pilot_export import is_developer_user
+        q_users = session.query(User)
+        users_df = pd.DataFrame([{"id": u.id, "is_simulated": u.is_simulated, "is_developer": is_developer_user(u)} for u in q_users.all()])
 
     elif export_dfs is not None:
         decisions_df = export_dfs.get("routing_decisions", pd.DataFrame())
@@ -202,12 +207,38 @@ def calculate_operational_efficiency(
     else:
         raise ValueError("Must provide either 'session' or 'export_dfs'.")
 
-    # Developer user filtering
+    # Apply exactly the same population to decisions, summaries, and tasks.
     developer_ids = {"developer", "dev_phase5", "dev"}
-    if exclude_developer and not decisions_df.empty and "user_id" in decisions_df.columns:
-        decisions_df = decisions_df[~decisions_df["user_id"].isin(developer_ids)]
-        if not summaries_df.empty and "user_id" in summaries_df.columns:
-            summaries_df = summaries_df[~summaries_df["user_id"].isin(developer_ids)]
+    if not users_df.empty:
+        if "is_developer" in users_df:
+            developer_ids.update(users_df.loc[users_df["is_developer"], "id"])
+        developer_ids.update(uid for uid in users_df["id"] if str(uid).startswith(("dev_", "developer")))
+    allowed_users = set(users_df["id"]) if not users_df.empty else set(decisions_df.get("user_id", []))
+    if exclude_developer:
+        allowed_users -= developer_ids
+    if exclude_simulated and not users_df.empty and "is_simulated" in users_df:
+        allowed_users -= set(users_df.loc[users_df["is_simulated"], "id"])
+    if user_id is not None:
+        allowed_users &= {user_id}
+    if not cycles_df.empty:
+        cycles_df = cycles_df[cycles_df["user_id"].isin(allowed_users)]
+        if live_only:
+            cycles_df = cycles_df[cycles_df["mode"] == "live"]
+            if "finished_at" in cycles_df:
+                cycles_df = cycles_df[cycles_df["finished_at"].notna()]
+            if "counts" in cycles_df:
+                cycles_df = cycles_df[cycles_df["counts"].apply(lambda c: not (c or {}).get("error") and (c or {}).get("status") != "failure")]
+    if not decisions_df.empty:
+        decisions_df = decisions_df[decisions_df["user_id"].isin(allowed_users)]
+        if live_only:
+            decisions_df = decisions_df[decisions_df["cycle_id"].isin(cycles_df.get("id", []))]
+    selected_ids = set(decisions_df.get("id", []))
+    if not summaries_df.empty:
+        summaries_df = summaries_df[summaries_df["decision_id"].isin(selected_ids)]
+        if "llm_model" in summaries_df:
+            summaries_df = summaries_df[~summaries_df["llm_model"].fillna("").str.startswith("mock")]
+    if not tasks_df.empty:
+        tasks_df = tasks_df[tasks_df["decision_id"].isin(selected_ids)]
 
     # Check for empty data
     if decisions_df.empty:
@@ -272,7 +303,7 @@ def calculate_operational_efficiency(
         measured_savings_status = "PARTIAL_CALLS_ONLY_NO_TOKENS"
         measured_llm_call_reduction = theoretical_call_reduction
         overall_llm_call_reduction = theoretical_call_reduction
-    elif summaries_df["tokens_in"].dropna().empty or (summaries_df["tokens_in"].fillna(0) == 0).all():
+    elif summaries_df[["tokens_in", "tokens_out"]].isna().any().any() or (summaries_df["tokens_in"].fillna(0) == 0).all():
         missing_telemetry_reasons.append(
             "Token counts (tokens_in, tokens_out) are unrecorded (all null or zero). "
             "Measured cost savings are NOT_MEASURABLE without fabrication."
@@ -318,7 +349,7 @@ def calculate_operational_efficiency(
     # Review queue and overflow analysis
     total_review_tasks_queued = len(tasks_df[tasks_df["kind"] == "borderline"]) if not tasks_df.empty else 0
     total_review_tasks_decided = (
-        len(tasks_df[tasks_df["decision"].isin(["accept", "reject", "skip"])]) if not tasks_df.empty else 0
+        len(tasks_df[tasks_df["decision"].isin(["accept", "reject"])]) if not tasks_df.empty else 0
     )
     total_review_tasks_expired = (
         len(tasks_df[tasks_df["decision"] == "expired"]) if not tasks_df.empty else 0
@@ -346,7 +377,7 @@ def calculate_operational_efficiency(
 
     # Cycle-level breakdown
     cycle_metrics: List[CycleEfficiencyMetric] = []
-    cycle_ids = decisions_df["cycle_id"].unique()
+    cycle_ids = cycles_df["id"].unique() if not cycles_df.empty else decisions_df["cycle_id"].unique()
     valid_cycle_ids = [c for c in cycle_ids if pd.notna(c)]
 
     tasks_by_cycle: Dict[int, int] = {}
@@ -389,7 +420,10 @@ def calculate_operational_efficiency(
                     c_tokens_out / 1_000_000 * cost_per_1m_output_usd
                 )
 
-        c_tasks_q = tasks_by_cycle.get(int(cid), 0)
+        c_tasks = tasks_df[tasks_df["decision_id"].isin(c_decisions["id"])] if not tasks_df.empty else pd.DataFrame()
+        c_tasks_q = int((c_tasks["kind"] == "borderline").sum()) if not c_tasks.empty else 0
+        c_review_overflow = c_decisions[(c_decisions["status"] == "DEFERRED_OVERFLOW") & c_decisions.get("reason", pd.Series("", index=c_decisions.index)).str.contains("queue|review", case=False, na=False)]
+        c_digest_overflow = c_decisions[(c_decisions["status"] == "DEFERRED_OVERFLOW") & ~c_decisions["id"].isin(c_review_overflow["id"])]
         c_overflow = len(c_decisions[c_decisions["status"] == "DEFERRED_OVERFLOW"])
         c_reduction = 1.0 - (c_summary_count / c_scored) if c_scored > 0 else 0.0
 
@@ -406,10 +440,10 @@ def calculate_operational_efficiency(
                 routed_low=c_low,
                 summaries_generated=c_summary_count,
                 review_tasks_queued=c_tasks_q,
-                review_tasks_decided=0,  # cycle specific decisions resolved via tasks
-                review_tasks_expired=0,
-                review_overflow=c_overflow,
-                digest_overflow=0,
+                review_tasks_decided=int(c_tasks["decision"].isin(["accept", "reject"]).sum()) if not c_tasks.empty else 0,
+                review_tasks_expired=int((c_tasks["decision"] == "expired").sum()) if not c_tasks.empty else 0,
+                review_overflow=len(c_review_overflow),
+                digest_overflow=len(c_digest_overflow),
                 llm_call_reduction=c_reduction,
                 tokens_in=c_tokens_in,
                 tokens_out=c_tokens_out,
@@ -426,7 +460,7 @@ def calculate_operational_efficiency(
         total_papers_scored=total_papers_scored,
         total_summaries_generated=total_summaries,
         overall_llm_call_reduction=overall_llm_call_reduction,
-        baseline_description="Summarize-everything baseline (all scored papers receive an interest-framed summary)",
+        baseline_description="Live non-developer/non-simulated scope; cost estimates use explicitly configured per-million-token rates, not billing records",
         has_token_telemetry=has_token_telemetry,
         total_tokens_in=total_tokens_in,
         total_tokens_out=total_tokens_out,

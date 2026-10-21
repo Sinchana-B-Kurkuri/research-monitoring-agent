@@ -219,7 +219,7 @@ def analyze_user_adaptation(
     # Test Hypothesis H2: Review burden (borderline tasks/cycle) does not increase after activation
     pre_burden = pre_metrics["review_burden_per_cycle"]
     post_burden = post_metrics["review_burden_per_cycle"]
-    h2_supported = bool(post_burden <= pre_burden)
+    h2_supported = bool(post_burden <= pre_burden) if pre_metrics["record_count"] and post_metrics["record_count"] else None
     h2_note = (
         f"Pre-activation burden={pre_burden:.2f} tasks/cycle, Post-activation burden={post_burden:.2f} tasks/cycle "
         f"({'Observed: burden did not increase' if h2_supported else 'Not observed: burden increased'})."
