@@ -175,6 +175,21 @@ def test_onboard_page_renders_form(client):
     assert "Research Interests" in response.text
 
 
+def test_web_onboarding_cli_mode_does_not_run_schema_migrations(monkeypatch, capsys):
+    from types import SimpleNamespace
+    from scripts import create_user as cli
+
+    monkeypatch.setattr("sys.argv", ["create_user.py", "--user-id", "cli_test",
+        "--name", "CLI Test", "--seed-text", "Robotics", "--skip-db-init"])
+    user = SimpleNamespace(id="cli_test", name="CLI Test", access_token="test-token",
+        is_simulated=True, created_at=datetime.now(timezone.utc), vector_versions=[])
+    with patch.object(cli, "init_db") as migrate, patch.object(cli, "SessionLocal") as sessions, patch.object(cli, "create_user", return_value=user):
+        cli.main()
+        migrate.assert_not_called()
+        sessions.return_value.close.assert_called_once()
+    capsys.readouterr()
+
+
 def test_onboard_post_missing_fields_validation(client):
     """POST /onboard with missing fields returns 400 Bad Request on JSON."""
     response = client.post(

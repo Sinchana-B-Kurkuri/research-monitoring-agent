@@ -52,6 +52,7 @@ def main() -> None:
         help="Flag user as a simulated user (Section 8.1 / 8.6).",
     )
     parser.add_argument("--require-new", action="store_true", help="Fail rather than return credentials for an existing user.")
+    parser.add_argument("--skip-db-init", action="store_true", help="Use the already initialized database (web onboarding); do not run schema migrations.")
     args = parser.parse_args()
 
     seed_text = args.seed_text or config.SEED_INTEREST
@@ -60,13 +61,12 @@ def main() -> None:
     overall_start = time.perf_counter()
     logger.info("Starting user initialization workflow for user_id='%s' (simulated=%s)", args.user_id, args.is_simulated)
 
-    # Ensure DB schema is ready
-    try:
+    # Trusted CLI setup may initialize the schema. Web requests must not perform
+    # migrations while other requests hold transactions against the same tables.
+    if not args.skip_db_init:
         t_db = time.perf_counter()
         init_db()
         logger.info("Database schema check completed in %.2fs", time.perf_counter() - t_db)
-    except Exception as e:
-        logger.warning("DB init check returned: %s. Proceeding with active session.", e)
 
     session = SessionLocal()
     try:

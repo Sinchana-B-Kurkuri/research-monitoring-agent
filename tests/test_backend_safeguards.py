@@ -136,3 +136,45 @@ def test_postgres_threshold_fallback_recovers_aborted_statement(monkeypatch):
             db.delete(db.get(Paper, pid))
             db.commit()
     engine.dispose()
+
+
+@pytest.mark.skipif(not os.getenv("TEST_DATABASE_URL"), reason="Requires explicitly configured disposable PostgreSQL")
+def test_onboarding_releases_web_transaction_before_independent_worker(monkeypatch):
+    from fastapi.testclient import TestClient
+    from types import SimpleNamespace
+    from research_monitor.ui.app import app, get_db
+
+    engine = create_engine(os.environ["TEST_DATABASE_URL"])
+    init_db(engine)
+    uid = "repair_onboard_" + uuid4().hex
+    with Session(engine) as web_session:
+        def independent_worker(command, **kwargs):
+            assert "--skip-db-init" in command
+            assert not web_session.in_transaction()
+            # Before the fix, the request's open SELECT blocks this otherwise
+            # harmless schema statement until the onboarding timeout expires.
+            with engine.begin() as connection:
+                connection.execute(text("SET LOCAL lock_timeout = '1500ms'"))
+                connection.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS access_token VARCHAR"))
+            with Session(engine) as worker:
+                worker.add(User(id=uid, name="Onboarding regression", access_token=uid, is_simulated=True))
+                worker.commit()
+            return SimpleNamespace(returncode=0)
+
+        app.dependency_overrides[get_db] = lambda: web_session
+        monkeypatch.setattr("subprocess.run", independent_worker)
+        try:
+            with TestClient(app) as client:
+                response = client.post("/onboard", json={
+                    "user_id": uid, "name": "Onboarding regression", "seed_text": "Robotic navigation",
+                })
+            assert response.status_code == 200
+            assert response.json()["user_id"] == uid
+        finally:
+            app.dependency_overrides.clear()
+            web_session.rollback()
+            user = web_session.get(User, uid)
+            if user:
+                web_session.delete(user)
+                web_session.commit()
+    engine.dispose()

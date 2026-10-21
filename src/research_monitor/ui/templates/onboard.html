@@ -31,7 +31,7 @@
         </div>
         {% endif %}
 
-        <form action="/onboard" method="POST" style="display: flex; flex-direction: column; gap: 1.25rem;">
+        <form id="onboard-form" action="/onboard" method="POST" style="display: flex; flex-direction: column; gap: 1.25rem;">
             <div>
                 <label for="user_id" style="display: block; font-size: 0.9rem; font-weight: 600; color: var(--text-primary); margin-bottom: 0.4rem;">
                     User Identifier <span style="color: var(--primary);">*</span>
@@ -101,7 +101,25 @@
                 </button>
             </div>
         </form>
+        <p id="onboard-progress" role="status" hidden style="margin-top: 1rem; color: var(--text-secondary);">
+            Initializing your profile. This may take a minute on the first run. Please keep this page open.
+        </p>
 
     </div>
 </div>
+<script>
+    const onboardingForm = document.getElementById('onboard-form');
+    onboardingForm.addEventListener('submit', function () {
+        const button = onboardingForm.querySelector('button[type="submit"]');
+        button.disabled = true;
+        button.textContent = 'Initializing profile...';
+        document.getElementById('onboard-progress').hidden = false;
+    });
+    window.addEventListener('pageshow', function () {
+        const button = onboardingForm.querySelector('button[type="submit"]');
+        button.disabled = false;
+        button.textContent = 'Initialize Pilot Profile →';
+        document.getElementById('onboard-progress').hidden = true;
+    });
+</script>
 {% endblock %}

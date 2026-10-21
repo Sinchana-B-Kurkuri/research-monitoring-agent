@@ -238,7 +238,12 @@ async def handle_onboard_user(
                 "audit_url": f"/audit?token={supplied_token}",
             })
 
-    # Execute create_user.py in separate subprocess to preserve web process isolation
+    # The lookup above starts a transaction and holds a users-table read lock.
+    # Release it before waiting for another process that writes to that database.
+    session.rollback()
+
+    # Execute create_user.py in separate subprocess to preserve web process isolation.
+    # Schema migrations belong to setup, not an interactive signup request.
     logger.info("Spawning isolated onboarding subprocess for user_id='%s' (name='%s')", user_id, name)
     start_time = time.perf_counter()
     try:
@@ -249,6 +254,7 @@ async def handle_onboard_user(
                 "--user-id", user_id,
                 "--name", name,
                 "--seed-text", seed_text,
+                "--skip-db-init",
                 *(["--require-new"] if existing_user is None else []),
             ],
             capture_output=True,
