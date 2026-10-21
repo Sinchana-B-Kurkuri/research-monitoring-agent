@@ -1,207 +1,54 @@
-# Relevance-Gated Agentic Workflow for Autonomous Research Monitoring
+# Research Monitoring Agent
 
-An adaptive, autonomous AI research monitoring platform that discovers, embeds, ranks, gates, summarizes, and learns from user feedback on live arXiv research papers.
+Research monitoring with arXiv ingestion, normalized 384-dimensional embeddings, HIGH/BORDERLINE/LOW routing, human review, personalized digests, and feedback-driven preference learning.
 
----
+The existing architecture is retained: a Python state machine, FastAPI/Jinja2/HTMX, PostgreSQL/pgvector, Rocchio updates, and guarded logistic regression.
 
-## Architecture & System Overview
+**Start with [the backend repair and verification guide](docs/BACKEND_REPAIRS.md).** It contains the diagnostics, fix plan, PowerShell commands, expected output, and commit history. [The earlier codebase analysis](docs/CODEBASE_ANALYSIS.md) records the pre-repair findings.
 
-```
-[arXiv Live Submissions]
-          │
-          ▼
-[Ingestion & Deduplication] ──── (Version strip, DB dedup, 384-d MiniLM embeddings)
-          │
-          ▼
-[Relevance State Machine]   ──── (Cosine similarity vs. calibrated P_high / P_low)
-   ├── HIGH (≥ t_high)      ────► [Auto-Delivered] ──► [Gated Gemini Flash Summary] ──► [Digest]
-   ├── BORDERLINE           ────► [Human Review Queue (Max 15)] ──► [Accept / Reject / Skip]
-   └── LOW (< t_low)        ────► [Audit Log (Discarded)]
-                                                              │
-                                                        [User Feedback] (👍 / 👎)
-                                                              │
-                                                              ▼
-                                                   [training_labels SQL View]
-```
-
-### Core Architecture Highlights
-- **Relevance Gating:** Two calibrated empirical percentile thresholds ($t_{high}, t_{low}$) route papers to prevent notification fatigue.
-- **Gated LLM Summarization:** Google Gemini 2.5 Flash generates interest-framed summaries *only* for delivered papers, with MD5-cached persistence.
-- **Lightweight Production Web Service:** FastAPI web portal operates with minimal memory and sub-100ms response times. PyTorch and `sentence_transformers` are **never** imported into the web process.
-- **Hosted PostgreSQL + pgvector:** Resilient connection pooling (`pool_pre_ping=True`, `pool_recycle=300`) supports cloud databases (Neon, Supabase, AWS RDS, GCP Cloud SQL) and local Docker Compose.
-- **Data Isolation:** Access-token authentication on all URLs ensures complete privacy between pilot users.
-
----
-
-## Quickstart & Local Setup
-
-### 1. Environment Setup
-```powershell
-# Create and activate virtual environment
-python -m venv venv
-.\venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Configure environment
-cp .env.example .env
-```
-
-### 2. Database Setup
-Ensure PostgreSQL with pgvector is running (either via local Docker Compose or cloud hosted instance):
-```powershell
-docker compose up -d
-```
-Set `DATABASE_URL` in `.env`:
-```text
-DATABASE_URL=postgresql+psycopg2://postgres:postgres@localhost:5432/research_monitor
-```
-
-Initialize database tables and pgvector extension:
-```powershell
-python -c "from research_monitor.database.session import init_db; init_db()"
-```
-
----
-
-## Production Deployment (Phase 9)
-
-### Production Start Command
-Start the production ASGI web server using Uvicorn:
-```powershell
-uvicorn research_monitor.ui.app:app --host 0.0.0.0 --port 8000 --workers 1
-```
-
-> [!IMPORTANT]
-> **512 MB RAM Tier Configuration (e.g. Render Web Services):**
-> Configure `WEB_CONCURRENCY=1` and `--workers 1`. A single worker operates with a baseline footprint of ~70-80 MB, ensuring >400 MB headroom for database connections and isolated subprocess onboarding without triggering cgroup out-of-memory (512 MB) kills.
-
-### Health Check Endpoint
-Cloud orchestrators and load balancers (Render, Fly.io, Railway, AWS, GCP) can monitor health via:
-```text
-GET /health
-```
-- **200 OK:** Database reachable (`{"status": "ok", "database": "connected", "version": "0.9.0"}`).
-- **503 Service Unavailable:** Database connectivity failure (`{"status": "degraded", "database": "disconnected"}`).
-
-### Required Environment Variables
-
-| Variable | Default | Description |
-|---|---|---|
-| `DATABASE_URL` | Local postgres URL | Hosted PostgreSQL connection string (supports `?sslmode=require`) |
-| `GEMINI_API_KEY` | `""` | Google Gemini API key for gated summaries (fallback heuristic active if omitted) |
-| `LLM_MODEL` | `gemini-2.5-flash` | Gemini model name for summarization |
-| `PORT` | `8000` | Port for the web service |
-| `HOST` | `0.0.0.0` | Host interface for web service |
-| `WEB_CONCURRENCY` | `1` | Number of worker processes (keep set to 1 on 512 MB instances) |
-| `DAILY_INGESTION_MAX_PAPERS` | `50` | Conservative ceiling on papers ingested per cycle |
-| `REVIEW_QUEUE_MAX_TASKS` | `15` | Maximum borderline review tasks queued per cycle |
-| `DIGEST_MAX_ITEMS` | `20` | Maximum delivered papers per digest |
-
----
-
-## Cold-Start Pilot Onboarding
-
-New researchers can be onboarded in seconds through either the Web UI or the CLI:
-
-### Option A: Web Onboarding
-1. Navigate to `http://localhost:8000/onboard` (or root `http://localhost:8000/`).
-2. Enter User ID, Display Name, and a descriptive paragraph of research interests.
-3. The system generates 384-dimensional seed embeddings, computes threshold boundaries, and displays your personalized access links.
-
-### Option B: CLI Onboarding
-```powershell
-python scripts/create_user.py --user-id pilot_researcher --name "Dr. Alice Chen" --seed-text "Autonomous AI agents, reinforcement learning from human feedback, LLM tool use, reasoning, multi-agent systems."
-```
-The command displays:
-- User ID and Access Token
-- Personalized Review Queue URL: `http://localhost:8000/review?token=<TOKEN>`
-- Personalized Digest URL: `http://localhost:8000/digest?token=<TOKEN>`
-- Personalized Audit URL: `http://localhost:8000/audit?token=<TOKEN>`
-
----
-
-## Daily Monitoring Execution
-
-Execute daily arXiv monitoring cycles without Celery, Redis, or Kubernetes:
-
-### 1. One-Shot Execution (Daily Cron / Task Scheduler)
-Run a single daily monitoring cycle for all registered pilot users:
-```powershell
-python scripts/run_daily_monitoring.py --user-id all --once
-```
-Or for a specific pilot user:
-```powershell
-python scripts/run_daily_monitoring.py --user-id pilot_researcher --once
-```
-
-**Cycle Outcome Tags:**
-- `[CYCLE_SUCCESS]`: New papers fetched, deduplicated, embedded, routed, and digests compiled.
-- `[CYCLE_EMPTY]`: 0 papers fetched from arXiv (e.g. arXiv weekend lull). Handled cleanly as a valid cycle.
-- `[CYCLE_FAILURE]`: Exception logged, error recorded, and transaction rolled back safely.
-
-### 2. In-Process Background Daemon
-To run continuously on a 24-hour schedule:
-```powershell
-python scripts/run_daily_monitoring.py --user-id all --daemon --interval-hours 24
-```
-
----
-
-## Pilot Tracking & 7-Day Checklist
-
-Track real progress toward the **seven consecutive daily monitoring cycles** objective:
+## Quick start
 
 ```powershell
-python scripts/track_pilot.py --user-id pilot_researcher
+Set-Location 'C:\Users\sinch\Desktop\AI Project\research-monitoring-agent'
+if (-not (Test-Path .\venv\Scripts\python.exe)) { python -m venv venv }
+.\venv\Scripts\python.exe -m pip install -r requirements.txt
+.\venv\Scripts\python.exe -m pip install -e . --no-deps
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+docker compose up -d db
+.\venv\Scripts\python.exe -c "from research_monitor.database.session import init_db; init_db()"
+.\venv\Scripts\python.exe scripts/run_phase3_loader.py
+.\venv\Scripts\python.exe scripts/create_user.py --user-id researcher --name 'Researcher' --seed-text 'Autonomous AI agents, language model reasoning, reinforcement learning, and tool use.'
+.\venv\Scripts\python.exe scripts/run_ui.py --host 127.0.0.1 --port 8000
 ```
 
-This command queries the database directly to report:
-- Active preference vector version and calibrated thresholds.
-- Consecutive daily cycle streak (`[#------] 1 / 7 consecutive days`).
-- Historical cycle outcomes (`[CYCLE_SUCCESS]`, `[CYCLE_EMPTY]`).
-- Pending and completed review decisions (Accept / Reject / Skip).
-- Digest delivery and user reaction telemetry (Likes 👍 / Dislikes 👎).
+Set DATABASE_URL in .env before initialization. The default Compose URL is postgresql+psycopg2://postgres:postgres@localhost:5432/research_monitor. The loader requires the existing data/corpus.parquet and data/embeddings.npy; the guide explains how to generate missing artifacts. It inserts missing papers without deleting existing records.
 
-*See [`docs/pilot_tracking.md`](file:///c:/Users/sinch/Desktop/AI%20Project/research-monitoring-agent/docs/pilot_tracking.md) for the complete 7-day verification checklist.*
+Save the personal review/digest/audit links printed by create_user.py. Missing tokens return 401, foreign resources return 403, and anonymous registration using an existing user ID returns 409. Access logs redact bearer tokens.
 
----
+## Monitoring and summaries
 
-## Verification & Testing
-
-Run compilation and the complete test suite:
 ```powershell
-# Bytecode compilation check
-python -m compileall src scripts tests -q
-
-# Full test suite execution
-pytest -v
+.\venv\Scripts\python.exe scripts/run_daily_monitoring.py --user-id researcher --once
+# Historical replay:
+.\venv\Scripts\python.exe scripts/run_cycle.py --user-id researcher --mode replay --as-of-date 2024-12-31 --limit 50
 ```
 
----
+Live daily runs build digests automatically. After replay, open the review link and use its digest update button. Later acceptances enter an existing digest within its remaining capacity. Failed summaries remain retryable, and skipped reviews remain actionable. Defaults are 15 review tasks and 20 digest items per cycle.
 
-## Troubleshooting & Rollback
+Set GEMINI_API_KEY for actual summaries. Without a key, the digest shows original abstracts with summaries pending; mock summaries require explicit selection. Defaults are gemini-2.5-flash, temperature 0.0, and prompt v1.0. The cache uses relational user/paper/model/prompt identity.
 
-### 1. Database Connection Drops
-- **Symptom:** Web requests return 503 or logs show closed connection.
-- **Resolution:** Hosted pools (Neon, Supabase) drop idle sockets. The engine is pre-configured with `pool_pre_ping=True` and `pool_recycle=300`. Verify `DATABASE_URL` includes `sslmode=require` if required by your provider.
+CALIBRATION_PATH defaults to data/calibrated_thresholds.json. Valid development calibration levels apply unless CALIBRATED_P_HIGH/CALIBRATED_P_LOW override them. Otherwise provisional P98/P90 levels apply. Adaptation uses effective labels from the SQL view and runs in the worker.
 
-### 2. Zero Results on arXiv Run
-- **Symptom:** `[CYCLE_EMPTY]` is output by `run_daily_monitoring.py`.
-- **Resolution:** arXiv does not publish new papers on Saturdays and Sundays (UTC). This is normal behavior and does not reset the 7-day monitoring streak.
+## Verification and data limits
 
-### 3. Missing Gemini API Key
-- **Symptom:** LLM summarization falls back to abstract excerpt.
-- **Resolution:** Set `GEMINI_API_KEY` in `.env`. The system operates seamlessly in graceful degradation mode when no key is present.
+The repaired suite passed **247 tests with no skips** against disposable PostgreSQL. Set TEST_DATABASE_URL explicitly to run PostgreSQL tests; tests never use the application's .env database URL. Generated test outputs go into temporary directories. See the guide for commands.
 
-### 4. Rollback Procedure
-If a deployment needs to be rolled back:
-```powershell
-# Revert to last stable commit
-git checkout HEAD~1
+The local sample currently contains **171 human labels out of 500 papers**. Final E1 reports BLOCKED_INCOMPLETE_DATA for the remaining 329 instead of inventing negatives. Phase 13 exits 2 when E1 is blocked, 1 on an evaluation error, and 0 when the requested analysis ran. Always inspect numbers_frozen to determine pilot completion.
 
-# Restart web service
-uvicorn research_monitor.ui.app:app --host 0.0.0.0 --port 8000
-```
-Database migrations are additive; tables and views maintain backward compatibility.
+Explicit heuristic simulations use --simulated-oracle and record a run manifest. E5 is a theoretical token/cost calculation; E6 is ideal oracle review. Neither is measured human pilot evidence. Offline classifier ablations deliberately differ from the live promotion guard. Use a separate --results-dir for new analysis.
+
+Historical paper drafts and result tables have not been regenerated and must not be treated as updated evidence.
+
+## Scheduling and deployment
+
+The daily runner supports --user-id all --once or --daemon --interval-hours 24 and can run under Task Scheduler/cron. Compose starts PostgreSQL only; this repository does not provision a hosted scheduler. Web, worker, and database remain separate processes. Hosted memory, latency, live arXiv availability, and Gemini output quality require deployment-specific verification.
