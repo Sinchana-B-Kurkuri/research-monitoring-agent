@@ -13,6 +13,8 @@ Features:
   - Supports `--import-csv` flag to import pre-annotated CSV files.
 """
 
+from typing import Any
+
 import argparse
 import logging
 import os

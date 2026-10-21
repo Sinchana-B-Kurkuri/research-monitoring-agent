@@ -11,6 +11,8 @@ Usage:
   python scripts/simulate_feedback.py --prepare-demo-snapshot
 """
 
+from typing import Optional
+
 import argparse
 from datetime import datetime, timedelta, timezone
 import logging

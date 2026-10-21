@@ -24,10 +24,12 @@ def init_db(target_engine=None):
             try:
                 with eng.begin() as conn:
                     conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
-                    conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS access_token VARCHAR;"))
-                    conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_simulated BOOLEAN DEFAULT FALSE;"))
-                    conn.execute(text("ALTER TABLE feedback_events ADD COLUMN IF NOT EXISTS decision_id INTEGER;"))
-                    conn.execute(text("ALTER TABLE feedback_events ADD COLUMN IF NOT EXISTS is_audit BOOLEAN DEFAULT FALSE;"))
+                # Commit extension creation independently of legacy migrations.
+                with eng.begin() as conn:
+                    conn.execute(text("ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS access_token VARCHAR;"))
+                    conn.execute(text("ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS is_simulated BOOLEAN DEFAULT FALSE;"))
+                    conn.execute(text("ALTER TABLE IF EXISTS feedback_events ADD COLUMN IF NOT EXISTS decision_id INTEGER;"))
+                    conn.execute(text("ALTER TABLE IF EXISTS feedback_events ADD COLUMN IF NOT EXISTS is_audit BOOLEAN DEFAULT FALSE;"))
 
                     # Schema migration for validation_labels table (user_id, sampling_stratum, labelled_at, constraints)
                     conn.execute(text("""
@@ -83,10 +85,7 @@ def init_db(target_engine=None):
                     """))
                     logger.info("Ensured pgvector extension and column migrations are applied.")
             except Exception as ext_err:
-                logger.warning(
-                    "Postgres pre-flight migration warning: %s",
-                    ext_err,
-                )
+                raise RuntimeError("PostgreSQL schema migration failed") from ext_err
         elif eng.dialect.name == "sqlite":
             try:
                 with eng.begin() as conn:
@@ -100,7 +99,7 @@ def init_db(target_engine=None):
                         if "labelled_at" not in cols and "created_at" in cols:
                             conn.execute(text("ALTER TABLE validation_labels RENAME COLUMN created_at TO labelled_at"))
             except Exception as sql_err:
-                logger.warning("SQLite pre-flight migration warning: %s", sql_err)
+                raise RuntimeError("SQLite schema migration failed") from sql_err
         Base.metadata.create_all(bind=eng)
         create_training_labels_view(eng)
         logger.info("Database schema and views initialized.")
@@ -114,6 +113,9 @@ def get_session():
     db = SessionLocal()
     try:
         yield db
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
 
@@ -124,5 +126,8 @@ def get_db_session():
     db = SessionLocal()
     try:
         yield db
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()

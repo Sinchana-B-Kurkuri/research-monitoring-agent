@@ -444,13 +444,18 @@ class TrainingLabel(Base):
         )
 
 
+# This query-only mapping must not be emitted as CREATE TABLE by create_all().
+# Its mapper retains the Table object after removal from the schema metadata.
+Base.metadata.remove(TrainingLabel.__table__)
+
+
 def create_training_labels_view(bind_or_engine) -> None:
     """
     Creates or replaces the training_labels database view in PostgreSQL or SQLite.
     Rule (Section 7.3): Most recent user like/dislike takes precedence over reviewer decision.
     Skips and expired tasks create no feedback events and thus produce no labels.
     """
-    from sqlalchemy import text
+    from sqlalchemy import inspect, text
     dialect_name = getattr(bind_or_engine, "dialect", None)
     dialect_str = dialect_name.name if dialect_name else "postgresql"
 
@@ -490,10 +495,14 @@ def create_training_labels_view(bind_or_engine) -> None:
         cm = nullcontext(bind_or_engine)
 
     with cm as conn:
+        # Recover the empty table produced by older initializers, without
+        # deleting unexpected data. Effective labels are derived from events.
+        if "training_labels" in inspect(conn).get_table_names():
+            if conn.execute(text("SELECT COUNT(*) FROM training_labels")).scalar():
+                raise RuntimeError("training_labels is a nonempty legacy table; back it up before converting it to a view.")
+            conn.execute(text("DROP TABLE training_labels"))
         if dialect_str == "postgresql":
-            conn.execute(text("DROP VIEW IF EXISTS training_labels CASCADE;"))
             conn.execute(text(f"CREATE OR REPLACE VIEW training_labels AS {view_sql}"))
         else:
-            conn.execute(text("DROP TABLE IF EXISTS training_labels;"))
             conn.execute(text("DROP VIEW IF EXISTS training_labels;"))
             conn.execute(text(f"CREATE VIEW training_labels AS {view_sql}"))
