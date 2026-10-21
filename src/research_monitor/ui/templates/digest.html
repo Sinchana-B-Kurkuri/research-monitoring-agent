@@ -15,6 +15,21 @@
     {% endif %}
 </div>
 
+{% if cycle_id %}
+<form hx-post="/cycle/{{ cycle_id }}/resume?token={{ token }}" hx-target="#resume-status" hx-swap="innerHTML" style="margin-bottom: 1rem;">
+    <button type="submit" class="btn btn-primary">Update Digest / Retry Summaries</button>
+    {% if pending_summaries %}
+    <span class="fallback-note">{{ pending_summaries }} summaries pending. After updating, use the View Digest link below to see the results.</span>
+    {% endif %}
+</form>
+<div id="resume-status" role="status" style="margin-bottom: 1rem;"></div>
+{% endif %}
+{% if not gemini_configured %}
+<div class="reason-box" role="status">
+    AI summaries are unavailable because this server has no Gemini API key configured. Save GEMINI_API_KEY in the project-root .env, restart the server, then retry summaries. Original abstracts remain available.
+</div>
+{% endif %}
+
 {% if digest and digest.items %}
     {% for item in digest.items %}
     <div class="card" id="digest-item-{{ item.id }}">

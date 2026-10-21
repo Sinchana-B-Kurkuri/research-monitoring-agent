@@ -409,6 +409,18 @@
             border-top: 1px solid var(--border);
             margin-top: auto;
         }
+        .btn:disabled { opacity: 0.6; cursor: wait; }
+        [aria-busy="true"]::after { content: ' Working...'; }
+        .summary-text { white-space: pre-line; }
+        .card-title, .card-meta, .summary-text { overflow-wrap: anywhere; }
+        .btn-group, .badges { flex-wrap: wrap; }
+        @media (max-width: 640px) {
+            header, .page-header, .card-header { flex-direction: column; align-items: flex-start; gap: 0.75rem; }
+            header { position: static; padding: 1rem; }
+            nav { flex-wrap: wrap; gap: 0.25rem; }
+            main { padding: 0 1rem; margin: 1rem auto; }
+            .card { padding: 1rem; }
+        }
     </style>
 </head>
 <body>
@@ -431,11 +443,43 @@
     </header>
 
     <main>
+        <div id="request-error" role="alert" class="reason-box" hidden></div>
         {% block content %}{% endblock %}
     </main>
 
     <footer>
         Relevance-Gated Agentic Workflow &bull; Phase 6 Human Review & Digest UI
     </footer>
+    <script>
+        document.body.addEventListener('htmx:beforeRequest', function (event) {
+            document.getElementById('request-error').hidden = true;
+            const source = event.detail.elt;
+            source.setAttribute('aria-busy', 'true');
+            source.querySelectorAll('button').forEach(button => button.disabled = true);
+            if (source.tagName === 'BUTTON') source.disabled = true;
+        });
+        document.body.addEventListener('htmx:afterRequest', function (event) {
+            const source = event.detail.elt;
+            source.removeAttribute('aria-busy');
+            source.querySelectorAll('button').forEach(button => button.disabled = false);
+            if (source.tagName === 'BUTTON') source.disabled = false;
+        });
+        function showRequestError(event) {
+            const message = document.getElementById('request-error');
+            const status = event.detail.xhr && event.detail.xhr.status;
+            message.textContent = status === 401 ? 'Your access link is invalid. Open your saved personal link.' :
+                status === 403 ? 'This action is unavailable for your account.' :
+                'The request could not complete. Refresh the page to check its current state before trying again.';
+            message.hidden = false;
+        }
+        ['htmx:responseError', 'htmx:sendError', 'htmx:timeout'].forEach(name => document.body.addEventListener(name, showRequestError));
+        window.addEventListener('load', function () {
+            if (!window.htmx) {
+                const message = document.getElementById('request-error');
+                message.textContent = 'Interactive controls could not load. Check your network connection and refresh this page.';
+                message.hidden = false;
+            }
+        });
+    </script>
 </body>
 </html>

@@ -28,7 +28,9 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy import text
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload, selectinload
+
+from research_monitor.config import config
 
 from research_monitor.database.models import (
     Cycle,
@@ -523,13 +525,19 @@ def _render_digest_page(
     cycle_id: Optional[int],
     session: Session,
 ) -> HTMLResponse:
-    query = session.query(Digest).filter(Digest.user_id == user.id)
+    query = session.query(Digest).options(
+        selectinload(Digest.items).joinedload(DigestItem.routing_decision).joinedload(RoutingDecision.paper),
+        selectinload(Digest.items).joinedload(DigestItem.routing_decision).joinedload(RoutingDecision.summary),
+    ).filter(Digest.user_id == user.id)
     if cycle_id:
         query = query.filter(Digest.cycle_id == cycle_id)
     else:
         query = query.order_by(Digest.id.desc())
 
     digest = query.first()
+    latest_cycle = session.query(Cycle).filter_by(user_id=user.id).order_by(Cycle.id.desc()).first()
+    selected_cycle_id = digest.cycle_id if digest else (latest_cycle.id if latest_cycle else None)
+    pending_summaries = sum(1 for item in digest.items if item.routing_decision.summary is None) if digest else 0
 
     # Map latest user reactions on digest items
     reactions: dict[int, int] = {}
@@ -558,6 +566,9 @@ def _render_digest_page(
             "token": token,
             "digest": digest,
             "reactions": reactions,
+            "cycle_id": selected_cycle_id,
+            "pending_summaries": pending_summaries,
+            "gemini_configured": bool(config.GEMINI_API_KEY),
             "active_tab": "digest",
         },
     )
@@ -615,10 +626,12 @@ def handle_resume_cycle(
         raise HTTPException(status_code=403, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-    status_text = "Retrieved existing digest" if already_existed else "Created new digest"
+    status_text = "Updated existing digest" if already_existed else "Created new digest"
+    pending = sum(1 for item in digest.items if item.routing_decision.summary is None)
+    pending_text = f" {pending} summaries pending; original abstracts are available." if pending else ""
     return HTMLResponse(
         f"""<div style="background: rgba(16, 185, 129, 0.15); border: 1px solid var(--accent-green); padding: 0.75rem; border-radius: 6px; color: var(--accent-green);">
-            &#10004; {status_text} #{digest.id} with {len(digest.items)} items. <a href="/digest?token={auth[1]}" style="color: var(--primary); text-decoration: underline;">View Digest &rarr;</a>
+            &#10004; {status_text} #{digest.id} with {len(digest.items)} items.{pending_text} <a href="/digest?token={auth[1]}&amp;cycle_id={cycle_id}" style="color: var(--primary); text-decoration: underline;">View Digest &rarr;</a>
         </div>"""
     )
 

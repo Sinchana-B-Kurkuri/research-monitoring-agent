@@ -203,3 +203,13 @@ These are simulations. The manifest records the sample hash, human/heuristic lab
 - Phase 13 completed its export/report pipeline while holding E1 for missing human labels; no final numbers were frozen.
 
 Gemini generation, live external arXiv availability, deployment memory/latency, and genuine pilot recruitment/observations were not established by these tests. Historical paper tables/figures remain unchanged and need separate regeneration after valid evidence is collected. The repository still has no provisioned hosted scheduler.
+
+## Local frontend and live run follow-up (21 October 2026)
+
+The application was started on `http://127.0.0.1:8000` against the existing local application database. A real arXiv daily run for the existing `researcher` profile completed cycle 6: 50 newly ingested/routed papers, three HIGH digest items, four BORDERLINE review tasks, and 43 LOW decisions. No review choices or reactions were fabricated.
+
+The user's `.env` contents were not inspected. File metadata showed the saved file was zero bytes, and normal application configuration reported no Gemini key. The three digest items therefore correctly display original abstracts with summaries pending. This establishes a missing saved configuration, not an invalid API key or provider outage. Gemini validity cannot be assessed until a key is actually loaded. Save the file, restart the web process (configuration is loaded at process startup), then use **Update Digest / Retry Summaries**; a browser refresh alone does not reload server configuration.
+
+Frontend follow-up changes add a digest retry control, accurate pending-summary feedback, cycle-specific digest links, request progress/errors, an unavailable-interactivity warning, and narrow-screen layout fixes. Digest rendering eagerly loads related papers/summaries to prevent per-item database queries. A regression with ten digest items verifies at most seven SQL statements for the complete authenticated page render.
+
+Verification: **250 passed, zero skipped**, with one third-party TestClient deprecation warning. Application-side rendering against the real application database returned HTTP 200 for health, digest, review, and audit; individual page checks took 11–85 ms in this local smoke run. The persistent Uvicorn process separately returned a healthy database response. Browser automation was denied localhost origin access by its approval gate, so visual rendering and browser click behavior were not verified. These local timings are smoke observations, not load benchmarks. No changes were pushed.
