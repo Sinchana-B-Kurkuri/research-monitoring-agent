@@ -48,11 +48,12 @@
     <div style="color: var(--accent-red); font-weight: 600; padding: 0.5rem 0;">
         &#10008; Rejected &bull; Excluded from Digest
     </div>
-    {% elif task.decision == 'skip' %}
+    {% else %}
+    {% if task.decision == 'skip' %}
     <div style="color: var(--text-muted); font-weight: 600; padding: 0.5rem 0;">
         &#8212; Skipped &bull; Remains Pending Review
     </div>
-    {% else %}
+    {% endif %}
     <div class="btn-group">
         <button class="btn btn-accept" 
                 hx-post="/review/{{ task.id }}/action?action=accept&token={{ token }}" 

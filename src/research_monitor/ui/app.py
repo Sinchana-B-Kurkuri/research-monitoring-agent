@@ -15,6 +15,8 @@ Follows Roadmap Section 6, 7.3, 7.6, and 9.1:
 
 from pathlib import Path
 import logging
+import re
+import secrets
 import subprocess
 import sys
 import time
@@ -24,6 +26,7 @@ from urllib.parse import parse_qs
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from starlette.concurrency import run_in_threadpool
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -192,53 +195,35 @@ async def handle_onboard_user(
             },
         )
 
-    # 0. Check if user already exists and has active vector version (idempotency / retry short-circuit)
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", user_id) or len(name) > 200 or len(seed_text) > 10000:
+        raise HTTPException(status_code=400, detail="Invalid user identifier or input too long.")
     existing_user = session.query(User).filter_by(id=user_id).first()
     if existing_user:
-        active_v0 = (
-            session.query(InterestVectorVersion)
-            .filter_by(user_id=existing_user.id)
-            .filter(InterestVectorVersion.is_active.is_(True))
-            .first()
-        )
-        if active_v0 is not None:
-            logger.info(
-                "User '%s' is already registered with an active profile. Returning credentials directly without spawning subprocess.",
-                user_id,
-            )
-            if "application/json" in content_type or request.headers.get("accept", "") == "application/json":
-                return JSONResponse(
-                    content={
-                        "status": "ok",
-                        "user_id": existing_user.id,
-                        "name": existing_user.name,
-                        "access_token": existing_user.access_token,
-                        "review_url": f"/review?token={existing_user.access_token}",
-                        "digest_url": f"/digest?token={existing_user.access_token}",
-                        "audit_url": f"/audit?token={existing_user.access_token}",
-                    }
-                )
-            return templates.TemplateResponse(
-                request=request,
-                name="onboard_success.html",
-                context={
-                    "user": existing_user,
-                    "token": existing_user.access_token,
-                    "active_tab": "onboard",
-                },
-            )
+        supplied_token = request.query_params.get("token", "")
+        if not existing_user.access_token or not secrets.compare_digest(supplied_token, existing_user.access_token):
+            raise HTTPException(status_code=409, detail="User ID already registered. Use your existing personal access link.")
+        active = session.query(InterestVectorVersion).filter_by(user_id=user_id, is_active=True).first()
+        if active is not None:
+            return JSONResponse(content={
+                "status": "ok", "user_id": existing_user.id, "name": existing_user.name,
+                "access_token": existing_user.access_token,
+                "review_url": f"/review?token={supplied_token}",
+                "digest_url": f"/digest?token={supplied_token}",
+                "audit_url": f"/audit?token={supplied_token}",
+            })
 
     # Execute create_user.py in separate subprocess to preserve web process isolation
     logger.info("Spawning isolated onboarding subprocess for user_id='%s' (name='%s')", user_id, name)
     start_time = time.perf_counter()
     try:
-        proc = subprocess.run(
+        proc = await run_in_threadpool(subprocess.run,
             [
                 sys.executable,
                 str(CREATE_USER_SCRIPT),
                 "--user-id", user_id,
                 "--name", name,
                 "--seed-text", seed_text,
+                *(["--require-new"] if existing_user is None else []),
             ],
             capture_output=True,
             text=True,
@@ -277,8 +262,8 @@ async def handle_onboard_user(
         )
 
     if proc.returncode != 0:
-        logger.error("User initialization subprocess failed: %s", proc.stderr)
-        error_msg = f"User initialization failed: {proc.stderr.strip() or 'Unknown subprocess error'}"
+        logger.error("User initialization subprocess failed (exit=%s)", proc.returncode)
+        error_msg = "User initialization failed. Check the server configuration or choose an unused user ID."
         if "application/json" in content_type or request.headers.get("accept", "") == "application/json":
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=error_msg)
         return templates.TemplateResponse(
@@ -378,6 +363,8 @@ def review_page_path(
 
 
 def _render_review_page(request: Request, user: User, token: str, session: Session) -> HTMLResponse:
+    from research_monitor.review.queue import expire_stale_tasks
+    expire_stale_tasks(user.id, session)
     # Fetch pending review tasks for this user, ordered by score DESC
     tasks = (
         session.query(ReviewTask)
@@ -419,6 +406,7 @@ def _render_review_page(request: Request, user: User, token: str, session: Sessi
             "token": token,
             "tasks": tasks,
             "cycle_id": cycle_id,
+            "review_cycle_ids": sorted({t.routing_decision.cycle_id for t in tasks if t.routing_decision.cycle_id}),
             "active_tab": "review",
         },
     )
@@ -454,7 +442,7 @@ def handle_review_action(
     except PermissionError as pe:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(pe))
     except ValueError as ve:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(ve))
+        raise HTTPException(status_code=404 if "not found" in str(ve) else 409, detail=str(ve))
 
     from research_monitor.relevance.classifier import find_nearest_feedback_papers
     if updated_task.routing_decision and updated_task.routing_decision.paper:
@@ -597,11 +585,12 @@ def handle_resume_cycle(
     Trigger idempotent resume_after_review operation for a cycle.
     """
     user, _ = auth
-    digest, already_existed = resume_after_review(
-        user_id=user.id,
-        cycle_id=cycle_id,
-        session=session,
-    )
+    try:
+        digest, already_existed = resume_after_review(user_id=user.id, cycle_id=cycle_id, session=session)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
     status_text = "Retrieved existing digest" if already_existed else "Created new digest"
     return HTMLResponse(
         f"""<div style="background: rgba(16, 185, 129, 0.15); border: 1px solid var(--accent-green); padding: 0.75rem; border-radius: 6px; color: var(--accent-green);">

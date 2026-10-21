@@ -51,6 +51,7 @@ def main() -> None:
         action="store_true",
         help="Flag user as a simulated user (Section 8.1 / 8.6).",
     )
+    parser.add_argument("--require-new", action="store_true", help="Fail rather than return credentials for an existing user.")
     args = parser.parse_args()
 
     seed_text = args.seed_text or config.SEED_INTEREST
@@ -76,6 +77,7 @@ def main() -> None:
             seed_text=seed_text,
             session=session,
             is_simulated=args.is_simulated,
+            require_new=args.require_new,
         )
         logger.info("User entity and vector setup completed in %.2fs", time.perf_counter() - t_user)
 

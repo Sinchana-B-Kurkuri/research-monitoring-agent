@@ -15,7 +15,10 @@ Follows Roadmap Section 6, 7.3, 7.6, and 9.1:
 from datetime import datetime, timedelta, timezone
 import logging
 from typing import Optional
+from sqlalchemy import case
 from sqlalchemy.orm import Session
+from research_monitor.config import config
+from research_monitor.database.models import Cycle
 
 from research_monitor.database.models import (
     FeedbackEvent,
@@ -34,7 +37,7 @@ def build_review_queue(
     user_id: str,
     cycle_id: int,
     session: Session,
-    max_tasks: int = MAX_REVIEW_TASKS_PER_CYCLE,
+    max_tasks: Optional[int] = None,
     enable_audit_sample: bool = False,
 ) -> list[ReviewTask]:
     """
@@ -42,6 +45,16 @@ def build_review_queue(
     Enforces maximum of 15 review tasks per user per cycle, ordered by score DESC.
     Logs overflow papers as DEFERRED_OVERFLOW.
     """
+    max_tasks = config.REVIEW_QUEUE_MAX_TASKS if max_tasks is None else max_tasks
+    if max_tasks < 0:
+        raise ValueError("Review cap cannot be negative.")
+    cycle = session.query(Cycle).filter_by(id=cycle_id).with_for_update().first()
+    if cycle is None or cycle.user_id != user_id:
+        raise PermissionError("Cycle does not belong to user.")
+    existing_count = session.query(ReviewTask).join(RoutingDecision).filter(
+        RoutingDecision.cycle_id == cycle_id, RoutingDecision.user_id == user_id,
+        ReviewTask.kind == "borderline").count()
+    max_tasks = max(0, max_tasks - existing_count)
     # 1. Fetch unqueued borderline routing decisions for this cycle
     query = (
         session.query(RoutingDecision)
@@ -51,7 +64,7 @@ def build_review_queue(
             RoutingDecision.route == "BORDERLINE",
             RoutingDecision.status == DecisionStatus.ROUTED_BORDERLINE.value,
         )
-        .order_by(RoutingDecision.cosine_score.desc())
+        .order_by(case((RoutingDecision.method == "classifier", RoutingDecision.clf_prob), else_=RoutingDecision.cosine_score).desc(), RoutingDecision.paper_id)
     )
     borderline_decisions = query.all()
 
@@ -121,7 +134,7 @@ def record_review_action(
     Apply a reviewer decision (accept, reject, skip) to a review task.
     Enforces user access control and records reviewer feedback events.
     """
-    task = session.query(ReviewTask).filter(ReviewTask.id == task_id).first()
+    task = session.query(ReviewTask).filter(ReviewTask.id == task_id).with_for_update().first()
     if not task:
         raise ValueError(f"ReviewTask with id {task_id} not found.")
 
@@ -131,6 +144,19 @@ def record_review_action(
 
     action_norm = action.lower().strip()
     now = datetime.now(timezone.utc)
+
+    if action_norm not in {"accept", "reject", "skip"}:
+        raise ValueError("Unsupported review action.")
+    if task.decision in {"accept", "reject", "expired"}:
+        if task.decision == action_norm:
+            return task
+        raise ValueError("Review task is already completed.")
+    queued_at = task.queued_at.replace(tzinfo=timezone.utc) if task.queued_at.tzinfo is None else task.queued_at
+    if task.expired_at is not None or queued_at <= now - timedelta(days=REVIEW_EXPIRY_DAYS):
+        expire_stale_tasks(user_id, session, now=now)
+        raise ValueError("Review task has expired.")
+    if dec.status != DecisionStatus.PENDING_REVIEW.value and task.kind != "audit":
+        raise ValueError("Review task is not pending.")
 
     if action_norm == "accept":
         task.decision = "accept"
@@ -185,6 +211,7 @@ def expire_stale_tasks(
     session: Session,
     expiry_days: int = REVIEW_EXPIRY_DAYS,
     now: Optional[datetime] = None,
+    commit: bool = True,
 ) -> list[ReviewTask]:
     """
     Expire undecided or skipped tasks older than expiry_days (default: 3 days).
@@ -215,7 +242,8 @@ def expire_stale_tasks(
         expired.append(task)
 
     if expired:
-        session.commit()
+        if commit:
+            session.commit()
         logger.info("Expired %d stale review tasks for user '%s'.", len(expired), user_id)
 
     return expired

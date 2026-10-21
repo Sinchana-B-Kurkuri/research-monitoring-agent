@@ -71,6 +71,7 @@ def create_user(
     p_high: Optional[float] = None,
     p_low: Optional[float] = None,
     reference_embeddings: Optional[np.ndarray] = None,
+    require_new: bool = False,
 ) -> User:
     """
     Create a new user, embed their seed paragraph, and initialize version 0 vector.
@@ -90,11 +91,19 @@ def create_user(
     Returns:
         Persisted User instance.
     """
+    if not user_id.strip() or not name.strip() or not seed_text.strip():
+        raise ValueError("User ID, name, and seed text are required.")
     now = datetime.now(timezone.utc)
 
     # 1. Check if user already exists
     existing = session.query(User).filter_by(id=user_id).first()
     if existing:
+        if require_new:
+            raise ValueError("User ID already registered.")
+        if not existing.access_token:
+            import secrets
+            existing.access_token = access_token or secrets.token_urlsafe(24)
+            session.flush()
         logger.warning("User '%s' already exists in database; verifying profile and v0 vector.", user_id)
         profile = session.query(InterestProfile).filter_by(user_id=existing.id).first()
         v0 = (
@@ -105,6 +114,7 @@ def create_user(
 
         if profile is not None and v0 is not None:
             logger.info("User '%s' is already fully initialized with profile and v0 vector.", user_id)
+            session.commit()
             return existing
 
         logger.info(
@@ -115,7 +125,7 @@ def create_user(
         )
 
         # Retrieve or compute seed vector
-        if profile and profile.seed_embedding:
+        if profile is not None and profile.seed_embedding is not None:
             seed_vec = np.array(profile.seed_embedding, dtype=np.float32)
         else:
             effective_seed_text = seed_text.strip() if seed_text.strip() else config.SEED_INTEREST

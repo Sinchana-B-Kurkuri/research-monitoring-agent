@@ -1,7 +1,7 @@
 """
 test_phase9_deployment.py
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
-Unit and integration tests for Phase 9 — Cold-Start Deployment & Pilot Launch:
+Unit and integration tests for Phase 9 â€” Cold-Start Deployment & Pilot Launch:
   1. Health check endpoint (/health) under normal and degraded conditions.
   2. Root portal navigation (/) with and without access tokens.
   3. Web process lightweight startup (no PyTorch / sentence_transformers loaded).
@@ -405,7 +405,7 @@ def test_onboard_retry_existing_user_short_circuits(client, sample_pilot_user):
     """
     with patch("subprocess.run") as mock_run:
         response = client.post(
-            "/onboard",
+            f"/onboard?token={sample_pilot_user.access_token}",
             json={
                 "user_id": sample_pilot_user.id,
                 "name": sample_pilot_user.name,

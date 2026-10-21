@@ -38,138 +38,71 @@ def resume_after_review(
     user_id: str,
     cycle_id: int,
     session: Session,
-    max_digest_items: int = MAX_DIGEST_ITEMS_PER_CYCLE,
+    max_digest_items: Optional[int] = None,
     now: Optional[datetime] = None,
     summarizer: Optional[BaseSummarizer] = None,
 ) -> tuple[Digest, bool]:
-    """
-    Idempotent operation to build and finalize the delivery digest for a monitoring cycle.
+    """Append later acceptances and retry missing summaries without duplicate items.
 
-    1. Expires any undecided tasks older than 3 days.
-    2. Returns existing digest if one was already generated for (user_id, cycle_id).
-    3. Collects HIGH papers (via = auto) and review-accepted borderline papers (via = review).
-    4. Orders candidate papers by cosine_score DESC.
-    5. Delivers up to max_digest_items (default: 20) with status DELIVERED.
-    6. Summarizes delivered papers if not already summarized (Phase 7).
-    7. Logs overflow candidates as DEFERRED_OVERFLOW (never summarized).
-    8. Returns tuple of (Digest, already_existed_boolean).
+    Already delivered papers retain their slots. Remaining slots go to eligible
+    papers ranked by the active scoring method. The cycle lock serializes resume
+    requests, including summary generation, on PostgreSQL.
     """
+    from research_monitor.config import config
+    from research_monitor.database.models import Cycle
+
+    if max_digest_items is None:
+        max_digest_items = config.DIGEST_MAX_ITEMS
+    if max_digest_items < 0:
+        raise ValueError("Digest cap cannot be negative.")
+    cycle = session.query(Cycle).filter_by(id=cycle_id).with_for_update().first()
+    if cycle is None:
+        raise ValueError("Cycle not found.")
+    if cycle.user_id != user_id:
+        raise PermissionError("Cycle does not belong to user.")
     current_time = now or datetime.now(timezone.utc)
+    expire_stale_tasks(user_id=user_id, session=session, now=current_time, commit=False)
+    digest = session.query(Digest).filter_by(user_id=user_id, cycle_id=cycle_id).first()
+    existed = digest is not None
+    if digest is None:
+        digest = Digest(user_id=user_id, cycle_id=cycle_id, created_at=current_time)
+        session.add(digest)
+        session.flush()
 
-    # 1. Expire stale tasks
-    expire_stale_tasks(user_id=user_id, session=session, now=current_time)
+    existing = {item.decision_id: item for item in digest.items}
+    decisions = session.query(RoutingDecision).filter_by(user_id=user_id, cycle_id=cycle_id).all()
+    candidates = []
+    for dec in decisions:
+        if dec.id in existing or dec.status not in {"ROUTED_HIGH", "SUMMARIZE_PENDING", "SUMMARIZED"}:
+            continue
+        accepted = any(t.decision == "accept" and t.kind != "audit" for t in dec.review_tasks)
+        if dec.route == "HIGH" or (dec.route == "BORDERLINE" and accepted):
+            candidates.append((dec, "auto" if dec.route == "HIGH" else "review"))
 
-    # 2. Check for existing digest (idempotency guard)
-    existing_digest = (
-        session.query(Digest)
-        .filter(Digest.user_id == user_id, Digest.cycle_id == cycle_id)
-        .first()
-    )
-    if existing_digest:
-        logger.info("Digest already exists for user '%s', cycle %d. Returning existing.", user_id, cycle_id)
-        return existing_digest, True
+    def score(dec):
+        return dec.clf_prob if dec.method == "classifier" and dec.clf_prob is not None else dec.cosine_score
 
-    # 3. Gather eligible auto-cleared HIGH papers
-    auto_high_decisions = (
-        session.query(RoutingDecision)
-        .filter(
-            RoutingDecision.user_id == user_id,
-            RoutingDecision.cycle_id == cycle_id,
-            RoutingDecision.route == "HIGH",
-            RoutingDecision.status.in_([
-                DecisionStatus.ROUTED_HIGH.value,
-                DecisionStatus.SUMMARIZE_PENDING.value,
-                DecisionStatus.SUMMARIZED.value,
-            ]),
-        )
-        .all()
-    )
-
-    # 4. Gather review-accepted borderline papers
-    review_accepted_decisions = (
-        session.query(RoutingDecision)
-        .join(ReviewTask, ReviewTask.decision_id == RoutingDecision.id)
-        .filter(
-            RoutingDecision.user_id == user_id,
-            RoutingDecision.cycle_id == cycle_id,
-            RoutingDecision.route == "BORDERLINE",
-            RoutingDecision.status.in_([
-                DecisionStatus.SUMMARIZE_PENDING.value,
-                DecisionStatus.SUMMARIZED.value,
-            ]),
-            ReviewTask.decision == "accept",
-            ReviewTask.kind != "audit",  # Audit papers never enter digest
-        )
-        .all()
-    )
-
-    # Combine candidates with origin tags
-    candidates: list[tuple[RoutingDecision, str]] = []
-    for dec in auto_high_decisions:
-        candidates.append((dec, "auto"))
-    for dec in review_accepted_decisions:
-        candidates.append((dec, "review"))
-
-    # 5. Order all candidates by cosine_score DESC (highest first)
-    candidates.sort(key=lambda pair: pair[0].cosine_score, reverse=True)
-
-    # 6. Create digest container
-    digest = Digest(
-        user_id=user_id,
-        cycle_id=cycle_id,
-        created_at=current_time,
-    )
-    session.add(digest)
-    session.flush()  # populate digest.id
-
-    # 7. Deliver up to max_digest_items
-    delivered = candidates[:max_digest_items]
-    overflow = candidates[max_digest_items:]
-
-    for position, (dec, via) in enumerate(delivered, start=1):
-        # Phase 7: Summarize paper if not already summarized
-        if dec.summary is None:
-            try:
-                summarize_decision(
-                    decision_id=dec.id,
-                    user_id=user_id,
-                    session=session,
-                    summarizer=summarizer,
-                )
-            except Exception as e:
-                logger.warning(
-                    "Summarization attempt failed for decision %d in digest: %s. Preserving fallback.",
-                    dec.id,
-                    e,
-                )
-
-        item = DigestItem(
-            digest_id=digest.id,
-            decision_id=dec.id,
-            position=position,
-            via=via,
-            shown_at=current_time,
-        )
-        dec.status = DecisionStatus.DELIVERED.value
-        session.add(item)
-
-    # 8. Mark overflow beyond digest cap as DEFERRED_OVERFLOW (strictly never summarized)
-    for dec, _ in overflow:
+    candidates.sort(key=lambda pair: (-score(pair[0]), pair[0].paper_id))
+    available = max(0, max_digest_items - len(existing))
+    for dec, via in candidates[:available]:
+        item = DigestItem(decision_id=dec.id, position=len(existing) + 1, via=via)
+        digest.items.append(item)
+        existing[dec.id] = item
+    for dec, _ in candidates[available:]:
         dec.status = DecisionStatus.DEFERRED_OVERFLOW.value
-        dec.reason = (
-            f"{dec.reason} | Digest cap ({max_digest_items}) exceeded. Logged as DEFERRED_OVERFLOW."
-        )
+        dec.reason += f" | Digest cap ({max_digest_items}) exceeded. Logged as DEFERRED_OVERFLOW."
+    session.flush()
 
+    digest.items.sort(key=lambda item: (-score(item.routing_decision), item.routing_decision.paper_id))
+    for position, item in enumerate(digest.items, start=1):
+        item.position = position
+        dec = item.routing_decision
+        if dec.summary is None:
+            summarize_decision(dec.id, user_id, session, summarizer=summarizer, commit=False)
+        if dec.summary is not None and dec.status != DecisionStatus.REACTED.value:
+            dec.status = DecisionStatus.DELIVERED.value
     session.commit()
-    logger.info(
-        "Created digest id %d for user '%s', cycle %d: %d delivered, %d deferred overflow.",
-        digest.id,
-        user_id,
-        cycle_id,
-        len(delivered),
-        len(overflow),
-    )
-    return digest, False
+    return digest, existed
 
 
 def record_user_feedback(

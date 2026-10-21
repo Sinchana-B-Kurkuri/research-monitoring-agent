@@ -8,13 +8,13 @@
         <h1 class="page-title">Human Review Queue</h1>
         <p class="page-subtitle">Borderline candidate papers awaiting human relevance triage (capped at 15 per cycle)</p>
     </div>
-    {% if cycle_id %}
-    <form hx-post="/cycle/{{ cycle_id }}/resume?token={{ token }}" hx-target="#resume-status" hx-swap="innerHTML">
+    {% for review_cycle_id in review_cycle_ids or ([cycle_id] if cycle_id else []) %}
+    <form hx-post="/cycle/{{ review_cycle_id }}/resume?token={{ token }}" hx-target="#resume-status" hx-swap="innerHTML">
         <button type="submit" class="btn btn-primary">
-            Finalize & Build Digest &rarr;
+            Update Digest for Cycle {{ review_cycle_id }} &rarr;
         </button>
     </form>
-    {% endif %}
+    {% endfor %}
 </div>
 
 <div id="resume-status" style="margin-bottom: 1.5rem;"></div>

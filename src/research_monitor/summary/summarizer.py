@@ -279,13 +279,13 @@ def get_summarizer(
 ) -> BaseSummarizer:
     """
     Factory to retrieve a configured summarizer instance.
-    If mock=True or GEMINI_API_KEY is not configured, returns a MockSummarizer.
+    Mock output requires explicit mock=True or provider="mock".
     """
     if mock:
         return MockSummarizer(**kwargs)
 
     # If provider explicitly requested as mock or no API key configured
-    if provider == "mock" or not config.GEMINI_API_KEY:
+    if provider == "mock":
         return MockSummarizer(**kwargs)
 
     return GeminiSummarizer(

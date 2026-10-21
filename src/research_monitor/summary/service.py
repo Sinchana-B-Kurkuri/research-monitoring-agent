@@ -68,6 +68,7 @@ def is_eligible_for_summarization(decision: RoutingDecision) -> tuple[bool, str]
             DecisionStatus.SUMMARIZE_PENDING.value,
             DecisionStatus.SUMMARIZED.value,
             DecisionStatus.DELIVERED.value,
+            DecisionStatus.REACTED.value,
         ):
             return True, "Accepted BORDERLINE paper is eligible for summarization."
         return False, f"Borderline paper with status '{decision.status}' is not eligible."
@@ -79,6 +80,7 @@ def is_eligible_for_summarization(decision: RoutingDecision) -> tuple[bool, str]
             DecisionStatus.SUMMARIZE_PENDING.value,
             DecisionStatus.SUMMARIZED.value,
             DecisionStatus.DELIVERED.value,
+            DecisionStatus.REACTED.value,
         ):
             return True, "HIGH paper is eligible for summarization."
         return False, f"HIGH paper with status '{decision.status}' is not eligible."
@@ -92,6 +94,7 @@ def summarize_decision(
     session: Session,
     summarizer: Optional[BaseSummarizer] = None,
     prompt_version: Optional[str] = None,
+    commit: bool = True,
 ) -> Optional[Summary]:
     """
     Summarize a single routing decision, respecting the relevance gate and summary cache.
@@ -114,7 +117,7 @@ def summarize_decision(
     Optional[Summary]
         The created or cached Summary, or None if generation failed.
     """
-    decision = session.query(RoutingDecision).filter(RoutingDecision.id == decision_id).first()
+    decision = session.query(RoutingDecision).filter(RoutingDecision.id == decision_id).with_for_update().first()
     if not decision:
         raise ValueError(f"RoutingDecision with id {decision_id} not found.")
 
@@ -175,7 +178,7 @@ def summarize_decision(
             session.add(summary)
             if decision.status == DecisionStatus.SUMMARIZE_PENDING.value:
                 decision.status = DecisionStatus.SUMMARIZED.value
-            session.commit()
+            session.commit() if commit else session.flush()
             return summary
         return decision.summary
 
@@ -210,8 +213,9 @@ def summarize_decision(
             str(e),
         )
         # Ensure retryable state: preserve or set SUMMARIZE_PENDING
-        decision.status = DecisionStatus.SUMMARIZE_PENDING.value
-        session.commit()
+        if decision.status != DecisionStatus.REACTED.value:
+            decision.status = DecisionStatus.SUMMARIZE_PENDING.value
+        session.commit() if commit else session.flush()
         return None
 
     # 7. Persist successful summary record
@@ -235,11 +239,12 @@ def summarize_decision(
             tokens_out=result.tokens_out,
         )
         session.add(summary)
+        decision.summary = summary
 
     if decision.status in (DecisionStatus.SUMMARIZE_PENDING.value, DecisionStatus.ROUTED_HIGH.value):
         decision.status = DecisionStatus.SUMMARIZED.value
 
-    session.commit()
+    session.commit() if commit else session.flush()
     logger.info(
         "Persisted summary id %d for decision %d, paper '%s' (tokens_in=%s, tokens_out=%s)",
         summary.id,
@@ -265,14 +270,15 @@ def summarize_decision_background(
 
     db = SessionLocal()
     try:
-        summarize_decision(
-            decision_id=decision_id,
-            user_id=user_id,
-            session=db,
-            summarizer=summarizer,
-            prompt_version=prompt_version,
-        )
+        # Reconcile delivery as well as generation, so acceptance after the
+        # daily digest exists is visible immediately and still respects its cap.
+        decision = db.query(RoutingDecision).filter_by(id=decision_id, user_id=user_id).first()
+        if decision is None:
+            raise ValueError("Routing decision not found.")
+        from research_monitor.review.digest import resume_after_review
+        resume_after_review(user_id, decision.cycle_id, db, summarizer=summarizer)
     except Exception as exc:
+        db.rollback()
         logger.error("Error in summarize_decision_background for decision %d: %s", decision_id, exc)
     finally:
         db.close()
