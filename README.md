@@ -35,7 +35,7 @@ Save the personal review/digest/audit links printed by create_user.py. Missing t
 
 Live daily runs build digests automatically. After replay, open the review link and use its digest update button. Later acceptances enter an existing digest within its remaining capacity. Failed summaries remain retryable, and skipped reviews remain actionable. Defaults are 15 review tasks and 20 digest items per cycle.
 
-Set GEMINI_API_KEY for actual summaries. Without a key, the digest shows original abstracts with summaries pending; mock summaries require explicit selection. Defaults are gemini-2.5-flash, temperature 0.0, and prompt v1.0. The cache uses relational user/paper/model/prompt identity.
+Set GEMINI_API_KEY for actual summaries. Without a key, the digest shows original abstracts with summaries pending; mock summaries require explicit selection. Defaults are gemini-3.5-flash-lite, temperature 0.0, and prompt v1.0. The cache uses relational user/paper/model/prompt identity.
 
 CALIBRATION_PATH defaults to data/calibrated_thresholds.json. Valid development calibration levels apply unless CALIBRATED_P_HIGH/CALIBRATED_P_LOW override them. Otherwise provisional P98/P90 levels apply. Adaptation uses effective labels from the SQL view and runs in the worker.
 

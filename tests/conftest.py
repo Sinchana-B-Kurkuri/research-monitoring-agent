@@ -3,6 +3,10 @@ import os
 
 import pytest
 
+# Tests use explicit mocks; never inherit a developer's live Gemini credential.
+# dotenv does not override an existing environment variable, even when empty.
+os.environ["GEMINI_API_KEY"] = ""
+
 # Set before application modules are collected. Integration tests require an
 # explicitly supplied disposable database, never the application's .env URL.
 os.environ["DATABASE_URL"] = os.environ.get(

@@ -63,7 +63,7 @@ class Config:
 
     # Phase 7: Gated LLM Summarization configuration
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-    LLM_MODEL = os.getenv("LLM_MODEL", "gemini-2.5-flash")
+    LLM_MODEL = os.getenv("LLM_MODEL", "gemini-3.5-flash-lite")
     LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.0"))
     SUMMARY_PROMPT_VERSION = os.getenv("SUMMARY_PROMPT_VERSION", "v1.0")
 
