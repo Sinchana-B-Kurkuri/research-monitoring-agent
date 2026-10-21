@@ -669,7 +669,7 @@ def handle_resume_cycle(
     pending = sum(1 for item in digest.items if item.routing_decision.summary is None)
     pending_text = f" {pending} summaries pending; original abstracts are available." if pending else ""
     return HTMLResponse(
-        f"""<div style="background: rgba(16, 185, 129, 0.15); border: 1px solid var(--accent-green); padding: 0.75rem; border-radius: 6px; color: var(--accent-green);">
+        f"""<div class="notice" role="status">
             &#10004; {status_text} #{digest.id} with {len(digest.items)} items.{pending_text} <a href="/digest?token={auth[1]}&amp;cycle_id={cycle_id}" style="color: var(--primary); text-decoration: underline;">View Digest &rarr;</a>
         </div>"""
     )

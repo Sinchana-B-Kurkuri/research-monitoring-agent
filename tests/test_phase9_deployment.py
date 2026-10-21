@@ -170,7 +170,7 @@ def test_onboard_page_renders_form(client):
     """GET /onboard renders the researcher onboarding form."""
     response = client.get("/onboard")
     assert response.status_code == 200
-    assert "Pilot Researcher Onboarding" in response.text
+    assert "Initialize a pilot" in response.text
     assert "User Identifier" in response.text
     assert "Research Interests" in response.text
 

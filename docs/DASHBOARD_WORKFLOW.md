@@ -53,6 +53,10 @@ Reports from browser jobs are isolated under ignored `data/web_evaluations/<job-
 
 ## Verification
 
+The shared UI uses only `#001C30`, `#176B87`, `#64CCC5`, and `#DAFFFB`, with transparent variations for borders and backgrounds. The header identifies the current pilot; six tabs switch between its pages. Back links sit above the page title, separately from the tabs. Saved pilots are available from the workspace and initialization page.
+
+History is an ordered sequence of monitoring sessions, feedback, and processing activity. Evaluation is an ordered sequence of activity, the evaluation action, and results. Records use compact rows; benchmark details expand on demand. The stylesheet supports narrow screens, visible keyboard focus, a skip link, and reduced motion.
+
 The implementation was verified with disposable PostgreSQL and authenticated HTTP requests, including concurrent start deduplication, global processing-slot serialization, foreign-history/job rejection, cookie-based profile recovery, cross-site write rejection, explicit feedback transfer/precedence, pre-cycle preference updates, and partial-vs-strict evaluation behavior. The full suite passed 265 tests with no skips and one third-party TestClient deprecation warning.
 
 A real browser-triggered monitoring job for the existing robotics profile completed with four generated Gemini summaries. A real available-data evaluation completed with five benchmark rows. An earlier parallel stress attempt exceeded Windows paging capacity; its failed record is retained, and heavyweight web jobs are now serialized. Browser visual automation remained denied by a saved permission or managed policy, so browser layout and click behavior were not visually verified. No `.env` contents were inspected, no user feedback was invented, and no changes were pushed.

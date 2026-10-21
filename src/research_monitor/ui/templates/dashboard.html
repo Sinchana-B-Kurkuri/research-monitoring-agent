@@ -1,13 +1,12 @@
 {% extends "base.html" %}
 {% block title %}{{ user.name }} · Dashboard{% endblock %}
 {% block content %}
-<a href="/onboard">← Back to pilots & initialization</a>
-<div class="page-header" style="margin-top:1rem;"><div><h1 class="page-title">{{ user.name }}</h1><p class="page-subtitle">Profile {{ user.id }} · Your links, monitoring controls, and saved memory</p></div></div>
+<div class="page-header"><div><p class="eyebrow">Your pilot at a glance</p><h1 class="page-title">Dashboard</h1><p class="page-subtitle">Manage your interests, start monitoring, and return to your latest papers.</p></div></div>
 <div class="card"><h2>Research interests</h2><p class="card-abstract">{{ profile.seed_text if profile else 'No interests saved' }}</p>
 <p>{{ stats.cycles }} monitoring sessions · {{ stats.digests }} digests · {{ stats.summaries }} summaries</p>
 <p>{{ stats.labels }} effective preference labels ({{ stats.positive }} positive, {{ stats.negative }} negative; {{ stats.inherited }} explicitly inherited).</p>
 {% if vector %}<p class="card-meta">Active interest vector v{{ vector.version }} · {{ vector.method }}. Feedback is saved immediately; preference updates apply to future monitoring sessions when sufficient evidence is available.</p>{% endif %}
-<div class="btn-group"><a class="btn btn-primary" href="/digest?token={{ token }}">Digest</a><a class="btn btn-skip" href="/review?token={{ token }}">Review queue</a><a class="btn btn-skip" href="/history?token={{ token }}">Full history</a><a class="btn btn-skip" href="/evaluation?token={{ token }}">Evaluation</a></div></div>
+<div class="btn-group"><a class="btn btn-primary" href="/digest?token={{ token }}">Digest</a><a class="btn btn-skip" href="/review?token={{ token }}">Review queue</a></div></div>
 <section class="card"><h2>Start a monitoring session</h2><p class="page-subtitle">Fetch recent papers, filter them for this profile, generate eligible summaries, and evaluate saved feedback. This continues in the background if you navigate away.</p>
 <form action="/jobs?token={{ token }}" method="post" data-job-form style="display:grid;gap:1rem;margin-top:1rem;">
 <input type="hidden" name="kind" value="monitor">
@@ -20,11 +19,13 @@
 </form>
 <div id="job-progress" role="status" class="reason-box" style="margin-top:1rem;" hidden></div>
 </section>
-<h2>Recent processing sessions</h2>
-{% for job in jobs %}<div class="card"><strong>{{ job.kind|capitalize }} · {{ job.status }}</strong><p class="card-meta">{{ job.created_at.strftime('%Y-%m-%d %H:%M UTC') }}</p>
+<div class="section-heading"><h2>Recent activity</h2><a href="/history?token={{ token }}">View full history →</a></div>
+<ol class="record-list">
+{% for job in jobs %}<li class="record-row"><div class="record-heading"><h3>{{ 'Monitoring' if job.kind == 'monitor' else 'Evaluation' }} <span class="badge badge-pending">{{ job.status|capitalize }}</span></h3><time>{{ job.created_at.strftime('%d %b %Y · %H:%M UTC') }}</time></div>
 {% if job.status in ['queued','running'] %}<p role="status" data-active-job="{{ job.id }}">{{ job.phase }}</p>{% else %}<p>{{ job.error or job.phase }}</p>{% endif %}
 {% if job.result and job.kind == 'monitor' %}<p>{{ job.result.metrics.fetched }} fetched · {{ job.result.metrics.total_routed }} newly routed for this profile · {{ job.result.metrics.high }} HIGH · {{ job.result.metrics.borderline }} BORDERLINE · {{ job.result.metrics.low }} LOW · {{ job.result.metrics.delivered }} delivered · {{ job.result.metrics.pending_summaries }} summaries pending</p>{% if job.result.metrics.pending_summaries %}<p class="reason-box">Some AI summaries are waiting for a successful provider response. Original abstracts are available; use Retry Summaries in the digest.</p>{% endif %}{% endif %}
-{% if job.cycle_id %}<div class="btn-group"><a href="/history/{{ job.cycle_id }}?token={{ token }}">Session details</a><a href="/digest?token={{ token }}&cycle_id={{ job.cycle_id }}">This session's digest</a></div>{% endif %}</div>
-{% else %}<div class="empty-state">No browser processing sessions yet. Existing monitoring history is available in Full history.</div>{% endfor %}
+{% if job.cycle_id %}<div class="record-actions"><a href="/history/{{ job.cycle_id }}?token={{ token }}">Session details</a><a href="/digest?token={{ token }}&amp;cycle_id={{ job.cycle_id }}">This session's digest</a></div>{% endif %}</li>
+{% else %}<li class="empty-state">No browser processing sessions yet. Earlier sessions are available in <a href="/history?token={{ token }}">your history</a>.</li>{% endfor %}
+</ol>
 {% include "_job_controls.html" %}
 {% endblock %}

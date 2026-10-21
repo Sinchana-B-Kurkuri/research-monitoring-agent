@@ -8,7 +8,7 @@
         <div class="badges">
             {% if task.routing_decision.method == 'classifier' and task.routing_decision.clf_prob is not none %}
             <span class="badge badge-score">Prob: {{ "%.4f"|format(task.routing_decision.clf_prob) }}</span>
-            <span class="badge" style="background: rgba(168, 85, 247, 0.15); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.3);">Classifier v{{ task.routing_decision.model_version_id }}</span>
+            <span class="badge badge-score">Classifier v{{ task.routing_decision.model_version_id }}</span>
             {% else %}
             <span class="badge badge-score">Score: {{ "%.4f"|format(task.routing_decision.cosine_score) }}</span>
             {% endif %}
@@ -24,7 +24,7 @@
     <div class="reason-box">
         <strong>Routing Reason:</strong> {{ task.routing_decision.reason }}
         {% if task.nearest_liked or task.nearest_rejected %}
-        <div style="margin-top: 0.5rem; padding-top: 0.5rem; border-top: 1px dashed rgba(255, 255, 255, 0.15); font-size: 0.85rem;">
+        <div class="preference-examples">
             <strong>Decision Explanations:</strong>
             {% if task.nearest_liked %}
             <div style="color: var(--accent-green); margin-top: 0.25rem;">

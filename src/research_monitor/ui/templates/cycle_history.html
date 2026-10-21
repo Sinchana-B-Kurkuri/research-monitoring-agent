@@ -1,7 +1,8 @@
 {% extends "base.html" %}
 {% block title %}Session {{ cycle.id }} · History{% endblock %}
+{% block back_navigation %}<div class="back-navigation"><a class="back-link" href="/history?token={{ token }}">← Back to history</a></div>{% endblock %}
 {% block content %}
-<a href="/history?token={{ token }}">← All history</a><h1 class="page-title">Session #{{ cycle.id }}</h1><p>{{ cycle.mode }} · {{ cycle.as_of_date }}</p>
+<h1 class="page-title">Session #{{ cycle.id }}</h1><p>{{ cycle.mode }} · {{ cycle.as_of_date }}</p>
 {% for decision in decisions %}<article class="card"><h3><a href="https://arxiv.org/abs/{{ decision.paper_id }}" target="_blank" rel="noopener">{{ decision.paper.title }}</a></h3><p>{{ decision.route }} · {{ decision.status }}</p><p class="card-meta">{{ decision.reason }}</p><p class="card-abstract">{{ decision.paper.abstract }}</p>{% if decision.summary %}<div class="card-summary">{{ decision.summary.text }}</div>{% endif %}</article>{% else %}<p>No routing decisions in this session. An empty scan or recorded failure can have no papers.</p>{% endfor %}
 <div class="btn-group">{% if page > 1 %}<a href="?token={{ token }}&page={{ page-1 }}">Previous papers</a>{% endif %}{% if has_more %}<a href="?token={{ token }}&page={{ page+1 }}">More papers</a>{% endif %}</div>
 {% endblock %}

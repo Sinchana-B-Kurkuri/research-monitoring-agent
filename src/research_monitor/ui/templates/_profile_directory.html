@@ -1,19 +1,14 @@
 {% if cards %}
-<section style="margin-bottom:2rem;">
-    <h2>{{ 'All initialized pilots' if operator else 'Your saved pilots in this browser' }} ({{ cards|length }})</h2>
-    <p class="page-subtitle">Personal links and history are retained. Choose a profile to continue.</p>
-    {% for card in cards %}
-    <article class="card" style="margin-top:1rem;">
-        <div class="card-header"><h3>{{ card.user.name }} <small class="user-tag">{{ card.user.id }}</small></h3>
-            {% if card.user.is_simulated %}<span class="badge badge-pending">Simulated</span>{% endif %}</div>
-        <p class="card-meta">Initialized {{ card.user.created_at.strftime('%Y-%m-%d %H:%M UTC') }} · {{ card.cycles }} monitoring sessions · {{ card.digests }} digests · {{ card.labels }} saved preference labels</p>
-        <div class="btn-group">
-            <a class="btn btn-primary" href="/dashboard?token={{ card.user.access_token }}">Open dashboard</a>
-            <a class="btn btn-skip" href="/review?token={{ card.user.access_token }}">Review</a>
-            <a class="btn btn-skip" href="/digest?token={{ card.user.access_token }}">Digest</a>
-            <a class="btn btn-skip" href="/history?token={{ card.user.access_token }}">History</a>
-        </div>
-    </article>
-    {% endfor %}
+<section class="profile-directory">
+    <h2>{{ 'Saved pilots' if operator else 'Your saved pilots' }} <span class="badge badge-pending">{{ cards|length }}</span></h2>
+    <p class="page-subtitle">Choose a profile to continue.</p>
+    <ul class="profile-grid">
+        {% for card in cards %}<li class="profile-card">
+            <div class="record-heading"><h3>{{ card.user.name }}</h3>{% if card.user.is_simulated %}<span class="badge badge-pending">Simulated</span>{% endif %}</div>
+            <p class="quiet">{{ card.user.id }} · Created {{ card.user.created_at.strftime('%d %b %Y') }}</p>
+            <p class="card-meta">{{ card.cycles }} sessions · {{ card.digests }} digests · {{ card.labels }} preferences</p>
+            <div class="btn-group"><a class="btn btn-primary" href="/dashboard?token={{ card.user.access_token }}">Open pilot →</a><a href="/history?token={{ card.user.access_token }}">View history</a></div>
+        </li>{% endfor %}
+    </ul>
 </section>
 {% endif %}

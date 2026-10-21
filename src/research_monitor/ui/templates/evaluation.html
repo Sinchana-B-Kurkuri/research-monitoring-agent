@@ -1,12 +1,39 @@
 {% extends "base.html" %}
 {% block title %}Evaluation · {{ user.name }}{% endblock %}
 {% block content %}
-<h1 class="page-title">Evaluation & preference memory</h1>
-<div class="card"><h2>This profile's activity</h2><p>{{ stats.cycles }} monitoring sessions · {{ stats.digests }} digests · {{ stats.summaries }} saved summaries</p><p>{{ stats.labels }} effective labels: {{ stats.positive }} positive, {{ stats.negative }} negative; {{ stats.inherited }} inherited.</p><p class="page-subtitle">Feedback is persistent. The first interest-vector update requires 10 effective labels including 3 positives; classifier training requires 30 labels including 8 of each class. Small feedback sets remain saved until these safeguards are met.</p></div>
-<div class="card"><h2>Evaluate available evidence</h2><p>Run the shared research benchmark on currently human-labeled papers and produce operational reports now. This benchmark uses the project's reference research topic; it is separate from this profile's personal feedback.</p><p class="page-subtitle">Missing human labels never stop monitoring or summaries. Partial benchmark results are clearly scoped to the labeled subset; they do not certify a completed pilot study.</p>
-<form action="/jobs?token={{ token }}" method="post" data-job-form><input type="hidden" name="kind" value="evaluation"><button class="btn btn-primary" type="submit">Evaluate available data</button></form><div id="job-progress" role="status" class="reason-box" hidden></div></div>
-{% if job %}<div class="card"><h2>Latest evaluation: {{ job.status }}</h2>{% if job.status in ['queued','running'] %}<p data-active-job="{{ job.id }}">{{ job.phase }}</p>{% else %}<p>{{ job.error or job.phase }}</p>{% endif %}
-{% if job.result %}<p>Report: {{ job.result.status }}</p><p>Benchmark: {{ job.result.e1.status }}</p><p>{{ job.result.e1.message or '' }}</p><p>Human-label coverage: {{ job.result.label_coverage.get('labeled', 0) }} / {{ job.result.label_coverage.get('total', 0) }}</p><p>Final research evidence complete: {{ 'Yes' if job.result.numbers_frozen else 'No; available-data results are still usable' }}</p>
-{% for row in job.result.benchmark_rows or [] %}<details class="card"><summary>{{ row.get('model_or_baseline', row.get('method', row.get('baseline', 'Benchmark result'))) }}</summary><dl>{% for key,value in row.items() %}<dt><strong>{{ key|replace('_',' ') }}</strong></dt><dd>{{ value }}</dd>{% endfor %}</dl></details>{% endfor %}{% endif %}</div>{% endif %}
+<div class="page-header"><div><p class="eyebrow">Understand your results</p><h1 class="page-title">Evaluation</h1><p class="page-subtitle">Check saved preferences, run an evaluation, then read the results.</p></div></div>
+<ol class="section-list">
+    <li class="section-step"><section aria-labelledby="evaluation-activity-title">
+        <h2 id="evaluation-activity-title">Review your activity</h2>
+        <dl class="metric-list"><div><dt>Monitoring sessions</dt><dd>{{ stats.cycles }}</dd></div><div><dt>Digests</dt><dd>{{ stats.digests }}</dd></div><div><dt>AI summaries</dt><dd>{{ stats.summaries }}</dd></div><div><dt>Saved preferences</dt><dd>{{ stats.labels }}</dd></div></dl>
+        <p class="quiet">{{ stats.positive }} positive · {{ stats.negative }} negative · {{ stats.inherited }} inherited preferences</p>
+        <details class="abstract-accordion"><summary>How saved feedback improves future sessions</summary><p class="page-subtitle">Feedback stays saved. The first interest-vector update needs 10 effective labels, including 3 positive labels. Classifier training needs 30 labels, including 8 of each class. Smaller feedback sets remain in memory until those requirements are met.</p></details>
+    </section></li>
+    <li class="section-step"><section aria-labelledby="evaluation-run-title">
+        <div class="section-intro"><h2 id="evaluation-run-title">Run an evaluation</h2><p class="page-subtitle">Compare filtering methods using the human-labeled papers already available. Monitoring and summaries keep working while evidence is incomplete.</p></div>
+        <form action="/jobs?token={{ token }}" method="post" data-job-form><input type="hidden" name="kind" value="evaluation"><button class="btn btn-primary" type="submit">Evaluate available data</button></form>
+        <p class="quiet" style="margin-top:.75rem;">The shared benchmark uses the project's reference research topic, separately from this pilot's personal feedback.</p>
+        <div id="job-progress" role="status" class="reason-box" hidden></div>
+    </section></li>
+    <li class="section-step"><section aria-labelledby="evaluation-results-title">
+        <div class="section-intro"><h2 id="evaluation-results-title">Read your results</h2><p class="page-subtitle">The latest evaluation appears here. Partial results describe the available sample.</p></div>
+        {% if job %}
+        <div class="record-heading"><span class="badge badge-pending">{{ job.status|capitalize }}</span><time>{{ job.created_at.strftime('%d %b %Y · %H:%M UTC') }}</time></div>
+        {% if job.status in ['queued','running'] %}<p role="status" class="notice" data-active-job="{{ job.id }}">{{ job.phase }}</p>{% elif job.error %}<p role="alert" class="notice">{{ job.error }}</p>{% endif %}
+        {% if job.result %}{% set coverage = job.result.label_coverage or {} %}
+        <div class="coverage"><label for="label-coverage">Human-label coverage <span>{{ coverage.get('labeled',0) }} / {{ coverage.get('total',0) }}</span></label><progress id="label-coverage" value="{{ coverage.get('labeled',0) }}" max="{{ coverage.get('total',0) or 1 }}">{{ coverage.get('labeled',0) }} labeled papers</progress></div>
+        <p class="notice">{% if job.result.numbers_frozen %}The complete research evidence requirements have been met.{% else %}Available-data report. Final research evidence is incomplete; these results still help you inspect current performance.{% endif %}</p>
+        {% if job.result.e1.message %}<p class="page-subtitle">{{ job.result.e1.message }}</p>{% endif %}
+        <ol class="benchmark-list" aria-label="Benchmark comparisons">
+            {% for row in job.result.benchmark_rows or [] %}<li>
+                <h3>{{ row.get('model_or_baseline',row.get('method',row.get('baseline','Benchmark result'))) }}</h3>
+                <dl class="metric-list compact">{% for key,label in [('precision','Precision'),('recall','Recall'),('f1','F1 score'),('pr_auc','PR-AUC')] %}<div><dt>{{ label }}</dt><dd>{{ '%.3f'|format(row[key]) if row.get(key) is number else '—' }}</dd></div>{% endfor %}</dl>
+                <details class="abstract-accordion"><summary>All measurements</summary><dl class="detail-list">{% for key,value in row.items() %}<dt>{{ key|replace('_',' ')|capitalize }}</dt><dd>{{ '%.4g'|format(value) if value is number and value is not boolean else value if value is not none else '—' }}</dd>{% endfor %}</dl></details>
+            </li>{% else %}<li class="empty-state">No benchmark measurements are available from this attempt yet.</li>{% endfor %}
+        </ol>
+        {% endif %}
+        {% else %}<p class="empty-state">No evaluation yet. Use “Evaluate available data” above to create your first report.</p>{% endif %}
+    </section></li>
+</ol>
 {% include "_job_controls.html" %}
 {% endblock %}
