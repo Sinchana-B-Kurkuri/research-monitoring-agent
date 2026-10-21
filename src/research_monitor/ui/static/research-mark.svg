@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <title>Research Monitor</title>
+  <rect width="32" height="32" rx="7" fill="#E4E0E1"/>
+  <g fill="none" stroke="#493628" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="7" y="5.5" width="13" height="20" rx="2"/>
+    <path d="M10.5 10h6M10.5 14h4M10.5 18h3"/>
+    <circle cx="21" cy="20" r="5" fill="#E4E0E1"/>
+    <path d="m24.5 23.5 3.5 3.5"/>
+  </g>
+</svg>

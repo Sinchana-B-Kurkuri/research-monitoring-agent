@@ -2,7 +2,7 @@
 {% block title %}Evaluation · {{ user.name }}{% endblock %}
 {% block content %}
 <div class="page-header"><div><p class="eyebrow">Understand your results</p><h1 class="page-title">Evaluation</h1><p class="page-subtitle">Check saved preferences, run an evaluation, then read the results.</p></div></div>
-<ol class="section-list">
+<ol class="section-list section-panels">
     <li class="section-step"><section aria-labelledby="evaluation-activity-title">
         <h2 id="evaluation-activity-title">Review your activity</h2>
         <dl class="metric-list"><div><dt>Monitoring sessions</dt><dd>{{ stats.cycles }}</dd></div><div><dt>Digests</dt><dd>{{ stats.digests }}</dd></div><div><dt>AI summaries</dt><dd>{{ stats.summaries }}</dd></div><div><dt>Saved preferences</dt><dd>{{ stats.labels }}</dd></div></dl>

@@ -2,7 +2,7 @@
 {% block title %}Initialize a pilot · Research Monitor{% endblock %}
 {% block content %}
 <div class="page-header"><div><p class="eyebrow">A new research focus</p><h1 class="page-title">Initialize a pilot</h1><p class="page-subtitle">Tell us what you study. Your pilot will keep its own papers, feedback, and personal links.</p></div></div>
-<div{% if cards %} class="onboarding-layout"{% endif %}>
+<div>
     <section class="card form-panel" aria-labelledby="profile-details-title">
         <h2 id="profile-details-title">Profile details</h2>
         {% if error %}<div class="notice" role="alert"><strong>We couldn't initialize this profile.</strong> {{ error }}</div>{% endif %}
@@ -24,7 +24,6 @@
         </form>
         <p id="onboard-progress" role="status" class="notice" hidden>Initializing your profile. This may take a minute on the first run. Please keep this page open.</p>
     </section>
-    {% if cards %}<aside aria-label="Saved pilot profiles">{% include "_profile_directory.html" %}</aside>{% endif %}
 </div>
 <script>
     const onboardingForm = document.getElementById('onboard-form');

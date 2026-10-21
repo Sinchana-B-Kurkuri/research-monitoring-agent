@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Research Monitor{% endblock %}</title>
+    <link rel="icon" type="image/svg+xml" href="/static/research-mark.svg">
     <!-- HTMX -->
     <script src="/static/htmx.min.js"></script>
     <link rel="stylesheet" href="/static/app.css">
@@ -12,7 +13,7 @@
     <a class="skip-link" href="#main-content">Skip to content</a>
     <header class="site-header">
         <div class="header-inner">
-            <a class="brand" href="/workspace"><span class="brand-mark" aria-hidden="true">R</span>Research Monitor</a>
+            <a class="brand" href="/workspace"><img class="brand-mark" src="/static/research-mark.svg" width="36" height="36" alt="" aria-hidden="true">Research Monitor</a>
             {% if user %}
             <div class="profile-label"><small>Current pilot</small>{{ user.name }}</div>
             {% elif active_tab == 'workspace' %}
@@ -32,7 +33,7 @@
 
     <main id="main-content">
         {% block back_navigation %}
-        {% if token %}<div class="back-navigation"><a class="back-link" href="/onboard">← Back to pilots</a></div>
+        {% if token %}<div class="back-navigation"><a class="back-link" href="/workspace">← Back to pilots</a></div>
         {% elif active_tab == 'onboard' %}<div class="back-navigation"><a class="back-link" href="/workspace">← Back to workspace</a></div>{% endif %}
         {% endblock %}
         <div id="request-error" role="alert" class="reason-box" hidden></div>
