@@ -19,6 +19,7 @@ The original isolated suite passed 217 tests and skipped eight PostgreSQL tests.
 | Tests could contact the application's database and overwrite E5/E6 results | Use explicit `TEST_DATABASE_URL`; default to an unavailable test-only address. Route generated test results and access logs to temporary directories. |
 | Existing digest returned before processing later review acceptances | Reconcile newly eligible items into the same digest, preserving delivered slots and the cap. |
 | Summary failure was overwritten with DELIVERED and never retried | Keep summary pending while the abstract is visible; resume retries missing summaries. Daily runs revisit earlier pending cycles. |
+| Reacting to an abstract changed its status and hid its missing summary from the retry scan | Also select delivered/reacted decisions without summaries; retry generation while preserving the user's reaction and existing digest item. |
 | Acceptance background task summarized without ensuring delivery/cap | Reconcile the complete cycle digest in the background worker. |
 | Repeated/terminal review actions could append duplicate events or revive expired tasks | Lock tasks; make repeated identical final actions idempotent; reject conflicting/expired transitions. |
 | Skipped tasks had no action buttons | Keep skip pending and actionable; expire stale tasks when the queue is opened. |
@@ -65,7 +66,7 @@ git diff 0e4cb5d..HEAD -- src scripts tests pyproject.toml requirements.txt
 git show b85d0f7
 ```
 
-The final documentation commit adds this guide and the historical analysis, updates README/environment guidance, and records verification. The existing untracked `report/` folder is intentionally not included in repair commits.
+The documentation commit `dd52d97` adds this guide and the historical analysis. A subsequent focused retry commit covers reactions made before a summary is available and updates final verification to 248 passing tests. The existing untracked `report/` folder is intentionally not included in repair commits.
 
 ## 1. Install and configure
 
@@ -188,7 +189,7 @@ These are simulations. The manifest records the sample hash, human/heuristic lab
 
 ## Verification evidence
 
-- Full suite: **247 passed, zero skipped, one third-party TestClient deprecation warning, 31.89 seconds**.
+- Full suite: **248 passed, zero skipped, one third-party TestClient deprecation warning, 31.36 seconds**.
 - Dependency check: no broken requirements.
 - Syntax check: every Python source/script/test file compiled.
 - Fresh PostgreSQL initialization succeeded twice with 13 tables and one effective-label view.

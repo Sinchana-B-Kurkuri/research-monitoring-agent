@@ -41,7 +41,7 @@ CALIBRATION_PATH defaults to data/calibrated_thresholds.json. Valid development 
 
 ## Verification and data limits
 
-The repaired suite passed **247 tests with no skips** against disposable PostgreSQL. Set TEST_DATABASE_URL explicitly to run PostgreSQL tests; tests never use the application's .env database URL. Generated test outputs go into temporary directories. See the guide for commands.
+The repaired suite passed **248 tests with no skips** against disposable PostgreSQL. Set TEST_DATABASE_URL explicitly to run PostgreSQL tests; tests never use the application's .env database URL. Generated test outputs go into temporary directories. See the guide for commands.
 
 The local sample currently contains **171 human labels out of 500 papers**. Final E1 reports BLOCKED_INCOMPLETE_DATA for the remaining 329 instead of inventing negatives. Phase 13 exits 2 when E1 is blocked, 1 on an evaluation error, and 0 when the requested analysis ran. Always inspect numbers_frozen to determine pilot completion.
 

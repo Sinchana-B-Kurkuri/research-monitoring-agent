@@ -210,3 +210,25 @@ def test_empty_survey_stats_and_identifier_validation(tmp_path):
     assert compute_survey_statistics([])["n_responses"] == 0
     with pytest.raises(ValueError, match="identifier"):
         get_survey_path("../escape", tmp_path)
+
+
+def test_daily_worker_retries_missing_summary_after_user_reaction(db_session, sample_user, sample_cycle):
+    from research_monitor.review.digest import record_user_feedback
+    from scripts.run_daily_monitoring import execute_daily_cycle_for_user
+
+    db_session.add(InterestVectorVersion(user_id=sample_user.id, version=0,
+        vector=[1.] + [0.]*383, method="seed", p_high_level=98, p_low_level=90,
+        t_high=.8, t_low=.3, is_active=True))
+    dec = _create_paper_and_decision(db_session, sample_user.id, sample_cycle.id,
+        "reacted_retry", "HIGH", .9, "ROUTED_HIGH")
+    db_session.commit()
+    llm = MockSummarizer(fail_times=1)
+    digest, _ = resume_after_review(sample_user.id, sample_cycle.id, db_session, summarizer=llm)
+    record_user_feedback(digest.items[0].id, "like", sample_user.id, db_session)
+    assert dec.status == "REACTED" and dec.summary is None
+    with patch("research_monitor.summary.service.get_summarizer", return_value=llm):
+        outcome, _, _ = execute_daily_cycle_for_user(sample_user, db_session,
+            categories=["cs.AI"], max_results=5, days=1, papers_override=[])
+    assert outcome == "[CYCLE_EMPTY]"
+    assert dec.summary is not None and dec.status == "REACTED"
+    assert len(digest.items) == 1 and llm.call_count == 2

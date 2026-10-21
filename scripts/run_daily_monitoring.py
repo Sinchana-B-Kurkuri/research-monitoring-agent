@@ -25,12 +25,13 @@ import signal
 import sys
 import time
 from typing import Optional
+from sqlalchemy import and_, or_
 
 # Ensure src is on sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
 
 from research_monitor.config import config
-from research_monitor.database.models import Cycle, RoutingDecision, User
+from research_monitor.database.models import Cycle, RoutingDecision, Summary, User
 from research_monitor.database.session import SessionLocal, init_db
 from research_monitor.ingestion.live import fetch_live_papers, run_live_cycle
 from research_monitor.relevance.pipeline import record_cycle_failure
@@ -184,8 +185,11 @@ def execute_daily_cycle_for_user(
         except Exception as clf_err:
             raise RuntimeError("Classifier update failed") from clf_err
 
-        pending_cycles = session.query(RoutingDecision.cycle_id).filter(
-            RoutingDecision.user_id == user.id, RoutingDecision.status == "SUMMARIZE_PENDING",
+        pending_cycles = session.query(RoutingDecision.cycle_id).outerjoin(
+            Summary, Summary.decision_id == RoutingDecision.id).filter(
+            RoutingDecision.user_id == user.id,
+            or_(RoutingDecision.status == "SUMMARIZE_PENDING",
+                and_(Summary.id.is_(None), RoutingDecision.status.in_(["DELIVERED", "REACTED"]))),
             RoutingDecision.cycle_id != state.cycle_id).distinct().limit(20).all()
         for (old_cycle_id,) in pending_cycles:
             resume_after_review(user.id, old_cycle_id, session, max_digest_items=max_digest_items)
