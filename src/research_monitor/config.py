@@ -73,6 +73,7 @@ class Config:
     # Phase 9: Production Deployment & Pilot Launch configuration
     PORT = int(os.getenv("PORT", "8000"))
     HOST = os.getenv("HOST", "0.0.0.0")
+    WEB_CONCURRENCY = int(os.getenv("WEB_CONCURRENCY", "1"))
     DAILY_INGESTION_MAX_PAPERS = int(os.getenv("DAILY_INGESTION_MAX_PAPERS", "50"))
     REVIEW_QUEUE_MAX_TASKS = int(os.getenv("REVIEW_QUEUE_MAX_TASKS", "15"))
     DIGEST_MAX_ITEMS = int(os.getenv("DIGEST_MAX_ITEMS", "20"))
@@ -104,6 +105,7 @@ LIVE_DAYS = config.LIVE_DAYS
 LIVE_SLEEP_SECONDS = config.LIVE_SLEEP_SECONDS
 PORT = config.PORT
 HOST = config.HOST
+WEB_CONCURRENCY = config.WEB_CONCURRENCY
 DAILY_INGESTION_MAX_PAPERS = config.DAILY_INGESTION_MAX_PAPERS
 REVIEW_QUEUE_MAX_TASKS = config.REVIEW_QUEUE_MAX_TASKS
 DIGEST_MAX_ITEMS = config.DIGEST_MAX_ITEMS

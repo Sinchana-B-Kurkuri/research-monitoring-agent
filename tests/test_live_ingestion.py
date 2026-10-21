@@ -518,6 +518,10 @@ def test_web_service_imports_without_torch():
     ]
     env = os.environ.copy()
     env["PYTHONPATH"] = "src"
+    # Constrain BLAS thread pools to 1 in child process to prevent OpenBLAS allocation failure on Windows
+    env["OPENBLAS_NUM_THREADS"] = "1"
+    env["OMP_NUM_THREADS"] = "1"
+    env["MKL_NUM_THREADS"] = "1"
     proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
     assert proc.returncode == 0, f"Import failed with stderr: {proc.stderr}"
     assert "ISOLATED" in proc.stdout

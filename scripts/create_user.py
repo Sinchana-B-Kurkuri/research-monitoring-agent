@@ -55,14 +55,21 @@ def main() -> None:
 
     seed_text = args.seed_text or config.SEED_INTEREST
 
+    import time
+    overall_start = time.perf_counter()
+    logger.info("Starting user initialization workflow for user_id='%s' (simulated=%s)", args.user_id, args.is_simulated)
+
     # Ensure DB schema is ready
     try:
+        t_db = time.perf_counter()
         init_db()
+        logger.info("Database schema check completed in %.2fs", time.perf_counter() - t_db)
     except Exception as e:
         logger.warning("DB init check returned: %s. Proceeding with active session.", e)
 
     session = SessionLocal()
     try:
+        t_user = time.perf_counter()
         user = create_user(
             user_id=args.user_id,
             name=args.name,
@@ -70,6 +77,7 @@ def main() -> None:
             session=session,
             is_simulated=args.is_simulated,
         )
+        logger.info("User entity and vector setup completed in %.2fs", time.perf_counter() - t_user)
 
         v0 = user.vector_versions[0] if user.vector_versions else None
 
@@ -96,6 +104,7 @@ def main() -> None:
         print("-" * 65)
         print(f"  Daily Run Command:   python scripts/run_daily_monitoring.py --user-id {user.id} --once")
         print("=" * 65 + "\n")
+        logger.info("User initialization workflow for user_id='%s' finished successfully in %.2fs", args.user_id, time.perf_counter() - overall_start)
     finally:
         session.close()
 

@@ -21,6 +21,12 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1", help="Host interface (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=8000, help="Server port (default: 8000)")
     parser.add_argument("--reload", action="store_true", help="Enable live reload for development")
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=int(os.getenv("WEB_CONCURRENCY", "1")),
+        help="Number of worker processes (default: 1 or WEB_CONCURRENCY env var)",
+    )
     args = parser.parse_args()
 
     print(f"Starting Research Monitor web server at http://{args.host}:{args.port}")
@@ -29,7 +35,10 @@ def main() -> None:
     print(f"  http://{args.host}:{args.port}/digest?token=<your_access_token>")
     print(f"  http://{args.host}:{args.port}/audit?token=<your_access_token>")
 
-    uvicorn.run("research_monitor.ui.app:app", host=args.host, port=args.port, reload=args.reload)
+    if args.reload:
+        uvicorn.run("research_monitor.ui.app:app", host=args.host, port=args.port, reload=True)
+    else:
+        uvicorn.run("research_monitor.ui.app:app", host=args.host, port=args.port, workers=args.workers)
 
 
 if __name__ == "__main__":

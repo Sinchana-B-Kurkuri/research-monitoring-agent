@@ -705,6 +705,12 @@ class TestFigureRegeneration:
         assert p1 is not None and p1.exists()
         assert p2 is not None and p2.exists()
 
+        import matplotlib.pyplot as plt
+        import gc
+        plt.close("all")
+        gc.collect()
+
+
 
 # =========================================================================
 # 10. Master Suite Execution & Deliverables

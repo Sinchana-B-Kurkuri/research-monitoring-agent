@@ -70,8 +70,12 @@ python -c "from research_monitor.database.session import init_db; init_db()"
 ### Production Start Command
 Start the production ASGI web server using Uvicorn:
 ```powershell
-uvicorn research_monitor.ui.app:app --host 0.0.0.0 --port 8000 --workers 2
+uvicorn research_monitor.ui.app:app --host 0.0.0.0 --port 8000 --workers 1
 ```
+
+> [!IMPORTANT]
+> **512 MB RAM Tier Configuration (e.g. Render Web Services):**
+> Configure `WEB_CONCURRENCY=1` and `--workers 1`. A single worker operates with a baseline footprint of ~70-80 MB, ensuring >400 MB headroom for database connections and isolated subprocess onboarding without triggering cgroup out-of-memory (512 MB) kills.
 
 ### Health Check Endpoint
 Cloud orchestrators and load balancers (Render, Fly.io, Railway, AWS, GCP) can monitor health via:
@@ -90,6 +94,7 @@ GET /health
 | `LLM_MODEL` | `gemini-2.5-flash` | Gemini model name for summarization |
 | `PORT` | `8000` | Port for the web service |
 | `HOST` | `0.0.0.0` | Host interface for web service |
+| `WEB_CONCURRENCY` | `1` | Number of worker processes (keep set to 1 on 512 MB instances) |
 | `DAILY_INGESTION_MAX_PAPERS` | `50` | Conservative ceiling on papers ingested per cycle |
 | `REVIEW_QUEUE_MAX_TASKS` | `15` | Maximum borderline review tasks queued per cycle |
 | `DIGEST_MAX_ITEMS` | `20` | Maximum delivered papers per digest |

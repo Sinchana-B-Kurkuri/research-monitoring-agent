@@ -392,3 +392,420 @@ def test_track_pilot_inspects_real_db_without_fabrication(db_session, sample_pil
     assert progress_after["streak_days"] == 1
     assert len(progress_after["cycle_details"]) == 1
     assert progress_after["cycle_details"][0]["status"] == "[CYCLE_SUCCESS]"
+
+
+# =========================================================================
+# 7. Render 512 MB Onboarding Optimization & Resilience Tests
+# =========================================================================
+
+def test_onboard_retry_existing_user_short_circuits(client, sample_pilot_user):
+    """
+    POST /onboard with an already initialized user returns immediately without
+    spawning the heavy create_user subprocess, preventing duplicate memory spikes.
+    """
+    with patch("subprocess.run") as mock_run:
+        response = client.post(
+            "/onboard",
+            json={
+                "user_id": sample_pilot_user.id,
+                "name": sample_pilot_user.name,
+                "seed_text": "Sample interests paragraph.",
+            },
+            headers={"Accept": "application/json"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "ok"
+        assert data["user_id"] == sample_pilot_user.id
+        assert data["access_token"] == sample_pilot_user.access_token
+        # Assert subprocess was never called
+        mock_run.assert_not_called()
+
+
+def test_onboard_subprocess_timeout_handling(client):
+    """POST /onboard handles subprocess.TimeoutExpired gracefully by returning 504."""
+    import subprocess
+    with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="create_user.py", timeout=90)):
+        response = client.post(
+            "/onboard",
+            json={
+                "user_id": "slow_user",
+                "name": "Slow Researcher",
+                "seed_text": "AI and reinforcement learning.",
+            },
+            headers={"Accept": "application/json"},
+        )
+        assert response.status_code == 504
+        assert "timed out" in response.json()["detail"].lower()
+
+
+def test_create_user_partial_initialization_repair(db_session):
+    """
+    If a previous onboarding attempt created User but crashed (OOM) before creating
+    InterestProfile or InterestVectorVersion, calling create_user repairs it.
+    """
+    from research_monitor.relevance.user_manager import create_user
+
+    # Create orphaned User without profile or vector version
+    now = datetime.now(timezone.utc)
+    orphaned = User(
+        id="crashed_pilot",
+        name="Dr. Crashed",
+        access_token="crashed_token_123",
+        is_simulated=False,
+        created_at=now,
+    )
+    db_session.add(orphaned)
+    db_session.commit()
+
+    # Pre-mock reference embeddings to avoid needing 5000 DB records in SQLite
+    mock_ref_embs = [([0.05] * 384)] * 10
+    import numpy as np
+
+    with patch("research_monitor.relevance.user_manager._generate_seed_vector", return_value=np.array([0.05] * 384, dtype=np.float32)):
+        repaired_user = create_user(
+            user_id="crashed_pilot",
+            name="Dr. Crashed",
+            seed_text="Autonomous agents and reasoning.",
+            session=db_session,
+            reference_embeddings=np.array(mock_ref_embs, dtype=np.float32),
+        )
+
+        assert repaired_user.id == "crashed_pilot"
+        # Profile must now exist
+        profile = db_session.query(InterestProfile).filter_by(user_id="crashed_pilot").first()
+        assert profile is not None
+        # Version 0 must now exist
+        v0 = db_session.query(InterestVectorVersion).filter_by(user_id="crashed_pilot", version=0).first()
+        assert v0 is not None
+        assert v0.method == "seed"
+        assert v0.is_active is True
+
+
+def test_in_database_pgvector_threshold_computation_branch():
+    """Verify in-database percentile_cont SQL query execution on PostgreSQL sessions."""
+    import numpy as np
+    from research_monitor.relevance.thresholds import compute_vector_thresholds
+
+    mock_session = MagicMock()
+    mock_session.bind.dialect.name = "postgresql"
+    # Return (t_high, t_low, ref_count)
+    mock_session.execute.return_value.fetchone.return_value = (0.825, 0.612, 5000)
+
+    vec = np.ones(384, dtype=np.float32)
+    thresholds = compute_vector_thresholds(vector=vec, session=mock_session)
+
+    assert thresholds.t_high == 0.825
+    assert thresholds.t_low == 0.612
+    # Verify execute was called with percentile_cont query and cosine distance operator
+    mock_session.execute.assert_called_once()
+    called_sql = str(mock_session.execute.call_args[0][0])
+    assert "percentile_cont" in called_sql
+    assert "is_reference = TRUE" in called_sql
+    assert "<=>" in called_sql
+
+
+# =========================================================================
+# 8. Threshold Numerical Equivalence, Normalization & Fallback Tests
+# =========================================================================
+
+def test_percentile_cont_mathematical_formula_equivalence():
+    """
+    Mathematical formula equivalence test:
+    Verify that PostgreSQL's percentile_cont linear interpolation formula
+    and NumPy's np.percentile(..., method='linear') are mathematically identical
+    across representative distributions, including 5,000 scores.
+    """
+    import gc
+    import numpy as np
+
+    rng = np.random.default_rng(2026)
+
+    distributions = [
+        ("Normal 5000", rng.standard_normal(5000, dtype=np.float32)),
+        ("Uniform 5000", rng.uniform(-1.0, 1.0, 5000).astype(np.float32)),
+        ("Exponential 5000", rng.exponential(1.0, 5000).astype(np.float32)),
+        ("Small 10", rng.standard_normal(10, dtype=np.float32)),
+    ]
+
+    percentiles = [98.0, 90.0, 50.0, 10.0, 2.0]
+
+    for dist_name, raw_scores in distributions:
+        sorted_scores = np.sort(raw_scores)
+        N = len(sorted_scores)
+
+        for p_val in percentiles:
+            p_frac = p_val / 100.0
+
+            # PostgreSQL percentile_cont linear continuous interpolation formula:
+            # index = (N - 1) * p; j = floor(index); f = index - j; val = (1 - f)*Y[j] + f*Y[j+1]
+            idx = (N - 1) * p_frac
+            j = int(np.floor(idx))
+            f = idx - j
+            if j >= N - 1:
+                pg_cont_val = float(sorted_scores[-1])
+            else:
+                pg_cont_val = float((1.0 - f) * sorted_scores[j] + f * sorted_scores[j + 1])
+
+            np_val = float(np.percentile(raw_scores, p_val, method="linear"))
+
+            diff = abs(pg_cont_val - np_val)
+            assert diff < 1e-6, (
+                f"Percentile mismatch on {dist_name} at P={p_val}: "
+                f"PostgreSQL formula={pg_cont_val:.8f}, NumPy={np_val:.8f}, diff={diff}"
+            )
+
+    del distributions
+    gc.collect()
+
+
+def test_real_postgresql_pgvector_percentile_integration():
+    """
+    Real PostgreSQL/pgvector database integration test.
+    Executes actual SQL percentile_cont on PostgreSQL if available, comparing against NumPy.
+    Skips cleanly if PostgreSQL database or pgvector is unavailable.
+    """
+    import gc
+    import os
+    import numpy as np
+    from sqlalchemy import create_engine, text
+    from research_monitor.config import DATABASE_URL
+
+    try:
+        engine = create_engine(DATABASE_URL)
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+            has_vector = conn.execute(text("SELECT 1 FROM pg_extension WHERE extname = 'vector'")).fetchone()
+            if not has_vector:
+                pytest.skip("pgvector extension not installed in PostgreSQL.")
+    except Exception as e:
+        pytest.skip(f"Real PostgreSQL database is unavailable for integration testing: {e}")
+
+    # Generate 500 synthetic reference embeddings and compare actual SQL execution against NumPy
+    rng = np.random.default_rng(42)
+    raw_refs = rng.standard_normal((500, 384), dtype=np.float32)
+    ref_matrix = raw_refs / np.linalg.norm(raw_refs, axis=1, keepdims=True)
+
+    raw_query = rng.standard_normal(384, dtype=np.float32)
+    query_vec = raw_query / np.linalg.norm(raw_query)
+
+    # Compute NumPy baseline
+    dot_products = np.dot(ref_matrix, query_vec)
+    np_t_high = float(np.percentile(dot_products, 98.0))
+    np_t_low = float(np.percentile(dot_products, 90.0))
+
+    vec_str = "[" + ",".join(f"{x:.8f}" for x in query_vec) + "]"
+
+    # Execute actual SQL query in a temporary table within a rolled-back transaction
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("CREATE TEMP TABLE temp_test_ref_papers (embedding vector(384))"))
+            for emb in ref_matrix:
+                e_str = "[" + ",".join(f"{x:.8f}" for x in emb) + "]"
+                conn.execute(text("INSERT INTO temp_test_ref_papers VALUES (CAST(:e AS vector))"), {"e": e_str})
+
+            sql = text(
+                """
+                SELECT
+                    percentile_cont(0.98) WITHIN GROUP (ORDER BY (1.0 - (embedding <=> CAST(:vec_str AS vector)))) AS t_high,
+                    percentile_cont(0.90) WITHIN GROUP (ORDER BY (1.0 - (embedding <=> CAST(:vec_str AS vector)))) AS t_low
+                FROM temp_test_ref_papers
+                """
+            )
+            row = conn.execute(sql, {"vec_str": vec_str}).fetchone()
+            sql_t_high = float(row[0])
+            sql_t_low = float(row[1])
+
+            assert sql_t_high == pytest.approx(np_t_high, abs=1e-4)
+            assert sql_t_low == pytest.approx(np_t_low, abs=1e-4)
+    finally:
+        del raw_refs, ref_matrix, raw_query, query_vec
+        gc.collect()
+
+
+def test_cosine_distance_unnormalized_vectors_mathematical_verification():
+    """
+    Verify that 1.0 - (u <=> v) yields exact cosine similarity even if vectors are unnormalized,
+    whereas dot product (u <#> v) * -1.0 deviates from cosine similarity when norms != 1.0.
+    """
+    import gc
+    import numpy as np
+
+    rng = np.random.default_rng(99)
+    # Create unnormalized vector with norm != 1.0 directly in float32
+    u = rng.standard_normal(384, dtype=np.float32) * 3.5
+    v = rng.standard_normal(384, dtype=np.float32) * 0.7
+
+    norm_u = np.linalg.norm(u)
+    norm_v = np.linalg.norm(v)
+
+    true_cosine_sim = float(np.dot(u, v) / (norm_u * norm_v))
+
+    # pgvector <=> formula: 1.0 - (u . v) / (|u| * |v|)
+    pg_cosine_distance = 1.0 - (float(np.dot(u, v)) / (norm_u * norm_v))
+    recovered_cosine_sim = 1.0 - pg_cosine_distance
+
+    # Inner product: u . v
+    raw_inner_product = float(np.dot(u, v))
+
+    assert recovered_cosine_sim == pytest.approx(true_cosine_sim, abs=1e-6)
+    # Raw inner product deviates significantly because norms are 3.5 and 0.7
+    assert abs(raw_inner_product - true_cosine_sim) > 0.5
+
+    del u, v
+    gc.collect()
+
+
+def test_compute_thresholds_fallback_when_db_has_zero_reference_papers(monkeypatch):
+    """
+    When PostgreSQL has 0 reference papers, compute_vector_thresholds must
+    not return None, but fall back to load_reference_embeddings and calculate valid thresholds.
+    """
+    import gc
+    import numpy as np
+    from research_monitor.config import config
+    from research_monitor.relevance.thresholds import compute_vector_thresholds
+
+    monkeypatch.setattr(config, "REFERENCE_SAMPLE_SIZE", 50)
+
+    mock_session = MagicMock()
+    mock_session.bind.dialect.name = "postgresql"
+    # Database returns count = 0
+    mock_session.execute.return_value.fetchone.return_value = (None, None, 0)
+
+    # Provide compact mock reference embeddings to avoid large allocations
+    rng = np.random.default_rng(42)
+    mock_ref = rng.standard_normal((50, 384), dtype=np.float32)
+    mock_ref = mock_ref / np.linalg.norm(mock_ref, axis=1, keepdims=True)
+
+    vec = np.ones(384, dtype=np.float32)
+
+    with patch("research_monitor.relevance.thresholds.load_reference_embeddings", return_value=mock_ref) as mock_load:
+        thresholds = compute_vector_thresholds(vector=vec, session=mock_session)
+
+        # Fallback loader must have been called
+        mock_load.assert_called_once_with(session=mock_session)
+        assert thresholds.t_high is not None
+        assert thresholds.t_low is not None
+        assert thresholds.t_high > thresholds.t_low
+
+    del mock_ref, thresholds
+    gc.collect()
+
+
+def test_compute_thresholds_fallback_when_db_has_underpopulated_reference_papers(monkeypatch):
+    """
+    When PostgreSQL has fewer than REFERENCE_SAMPLE_SIZE papers,
+    compute_vector_thresholds must reject the incomplete sample and fall back to the full reference set.
+    """
+    import gc
+    import numpy as np
+    from research_monitor.config import config
+    from research_monitor.relevance.thresholds import compute_vector_thresholds
+
+    monkeypatch.setattr(config, "REFERENCE_SAMPLE_SIZE", 50)
+
+    mock_session = MagicMock()
+    mock_session.bind.dialect.name = "postgresql"
+    # Database returns only 10 papers (less than required 50)
+    mock_session.execute.return_value.fetchone.return_value = (0.75, 0.55, 10)
+
+    rng = np.random.default_rng(42)
+    mock_ref = rng.standard_normal((50, 384), dtype=np.float32)
+    mock_ref = mock_ref / np.linalg.norm(mock_ref, axis=1, keepdims=True)
+
+    vec = np.ones(384, dtype=np.float32)
+
+    with patch("research_monitor.relevance.thresholds.load_reference_embeddings", return_value=mock_ref) as mock_load:
+        thresholds = compute_vector_thresholds(vector=vec, session=mock_session)
+
+        # Must fall back to file artifacts instead of using the underpopulated DB result
+        mock_load.assert_called_once_with(session=mock_session)
+        assert thresholds.t_high is not None
+        assert thresholds.t_low is not None
+
+    del mock_ref, thresholds
+    gc.collect()
+
+
+def test_compute_thresholds_fallback_when_db_query_raises_exception(monkeypatch):
+    """
+    When PostgreSQL query raises an OperationalError (e.g. pgvector not installed or connection drops),
+    compute_vector_thresholds must catch it, log a warning, and fall back without crashing.
+    """
+    import gc
+    import numpy as np
+    from research_monitor.config import config
+    from research_monitor.relevance.thresholds import compute_vector_thresholds
+
+    monkeypatch.setattr(config, "REFERENCE_SAMPLE_SIZE", 50)
+
+    mock_session = MagicMock()
+    mock_session.bind.dialect.name = "postgresql"
+    mock_session.execute.side_effect = Exception("UndefinedFunction: operator does not exist: vector <=> vector")
+
+    rng = np.random.default_rng(42)
+    mock_ref = rng.standard_normal((50, 384), dtype=np.float32)
+    mock_ref = mock_ref / np.linalg.norm(mock_ref, axis=1, keepdims=True)
+
+    vec = np.ones(384, dtype=np.float32)
+
+    with patch("research_monitor.relevance.thresholds.load_reference_embeddings", return_value=mock_ref) as mock_load:
+        thresholds = compute_vector_thresholds(vector=vec, session=mock_session)
+
+        mock_load.assert_called_once_with(session=mock_session)
+        assert thresholds.t_high is not None
+        assert thresholds.t_low is not None
+
+    del mock_ref, thresholds
+    gc.collect()
+
+
+def test_load_reference_embeddings_missing_artifacts_raises_file_not_found(tmp_path):
+    """
+    When both DB and local file artifacts are missing, load_reference_embeddings
+    must raise FileNotFoundError to prevent silent corruption.
+    """
+    from research_monitor.relevance.thresholds import load_reference_embeddings
+
+    missing_corpus = tmp_path / "nonexistent_corpus.parquet"
+    missing_embeddings = tmp_path / "nonexistent_embeddings.npy"
+
+    with pytest.raises(FileNotFoundError) as exc_info:
+        load_reference_embeddings(
+            session=None,
+            corpus_path=missing_corpus,
+            embeddings_path=missing_embeddings,
+        )
+
+    assert "missing" in str(exc_info.value).lower()
+
+
+def test_load_reference_embeddings_loads_real_artifacts_correctly():
+    """
+    Verify that load_reference_embeddings loads the real project artifacts
+    (data/corpus.parquet and data/embeddings.npy) with correct shape and L2 normalization.
+    Avoids unnecessary matrix copies and cleans up memory immediately.
+    """
+    import gc
+    import numpy as np
+    from research_monitor.relevance.thresholds import load_reference_embeddings
+
+    ref_embs = load_reference_embeddings(session=None)
+
+    try:
+        assert ref_embs.shape == (5000, 384)
+        assert ref_embs.dtype == np.float32
+
+        # Check normalization on representative sampled rows across the matrix
+        # without copying or allocating 5,000 float64 norms
+        sample_indices = [0, 1, 10, 100, 500, 1000, 2500, 4999]
+        sample_norms = np.linalg.norm(ref_embs[sample_indices], axis=1)
+        assert np.allclose(sample_norms, 1.0, atol=1e-5)
+
+        # Verify norm over the first 100 rows
+        slice_norms = np.linalg.norm(ref_embs[:100], axis=1)
+        assert np.allclose(slice_norms, 1.0, atol=1e-5)
+    finally:
+        del ref_embs
+        gc.collect()

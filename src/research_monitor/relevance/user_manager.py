@@ -28,6 +28,39 @@ from research_monitor.relevance.thresholds import compute_vector_thresholds
 logger = logging.getLogger(__name__)
 
 
+def _generate_seed_vector(text: str) -> np.ndarray:
+    """
+    Generate normalized seed interest vector with minimal memory footprint.
+    Restricts PyTorch thread pools and immediately frees model memory.
+    """
+    import gc
+    import torch
+    from sentence_transformers import SentenceTransformer
+
+    # Restrict PyTorch thread pools to prevent memory bloat in memory-constrained environments
+    torch.set_num_threads(1)
+    try:
+        torch.set_num_interop_threads(1)
+    except RuntimeError:
+        pass
+
+    embedder = SentenceTransformer(config.EMBEDDING_MODEL)
+    with torch.no_grad():
+        vec = embedder.encode(text.strip(), convert_to_numpy=True)
+
+    # Immediately release embedder and trigger garbage collection
+    del embedder
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    vec = vec.astype(np.float32)
+    norm = np.linalg.norm(vec)
+    if norm > 0:
+        vec = vec / norm
+    return vec
+
+
 def create_user(
     user_id: str,
     name: str,
@@ -41,6 +74,7 @@ def create_user(
 ) -> User:
     """
     Create a new user, embed their seed paragraph, and initialize version 0 vector.
+    Safe for retries: checks for existing user and completes partial initializations.
 
     Args:
         user_id: Unique string identifier for user (e.g. 'developer' or 'user_001').
@@ -56,22 +90,80 @@ def create_user(
     Returns:
         Persisted User instance.
     """
+    now = datetime.now(timezone.utc)
+
     # 1. Check if user already exists
     existing = session.query(User).filter_by(id=user_id).first()
     if existing:
-        logger.warning("User '%s' already exists in database.", user_id)
+        logger.warning("User '%s' already exists in database; verifying profile and v0 vector.", user_id)
+        profile = session.query(InterestProfile).filter_by(user_id=existing.id).first()
+        v0 = (
+            session.query(InterestVectorVersion)
+            .filter_by(user_id=existing.id, version=0)
+            .first()
+        )
+
+        if profile is not None and v0 is not None:
+            logger.info("User '%s' is already fully initialized with profile and v0 vector.", user_id)
+            return existing
+
+        logger.info(
+            "User '%s' exists but is missing profile (%s) or v0 vector (%s). Repairing partial initialization...",
+            user_id,
+            profile is not None,
+            v0 is not None,
+        )
+
+        # Retrieve or compute seed vector
+        if profile and profile.seed_embedding:
+            seed_vec = np.array(profile.seed_embedding, dtype=np.float32)
+        else:
+            effective_seed_text = seed_text.strip() if seed_text.strip() else config.SEED_INTEREST
+            logger.info("Encoding seed interest paragraph for existing user '%s'...", user_id)
+            seed_vec = _generate_seed_vector(effective_seed_text)
+
+        thresholds = compute_vector_thresholds(
+            vector=seed_vec,
+            reference_embeddings=reference_embeddings,
+            p_high=p_high,
+            p_low=p_low,
+            session=session,
+        )
+
+        if profile is None:
+            effective_seed_text = seed_text.strip() if seed_text.strip() else config.SEED_INTEREST
+            profile = InterestProfile(
+                user_id=existing.id,
+                seed_text=effective_seed_text,
+                seed_embedding=seed_vec.tolist(),
+                created_at=now,
+            )
+            session.add(profile)
+
+        if v0 is None:
+            v0 = InterestVectorVersion(
+                user_id=existing.id,
+                version=0,
+                vector=seed_vec.tolist(),
+                method="seed",
+                n_effective_labels=0,
+                built_from_max_event_id=None,
+                p_high_level=thresholds.p_high,
+                p_low_level=thresholds.p_low,
+                t_high=thresholds.t_high,
+                t_low=thresholds.t_low,
+                created_at=now,
+                is_active=True,
+            )
+            session.add(v0)
+
+        session.commit()
+        logger.info("Repaired and completed initialization for user '%s'.", existing.id)
         return existing
 
-    # 2. Embed the seed interest paragraph
-    from sentence_transformers import SentenceTransformer
-
+    # 2. Embed the seed interest paragraph using memory-efficient routine
     logger.info("Encoding seed interest paragraph for user '%s'...", user_id)
-    embedder = SentenceTransformer(config.EMBEDDING_MODEL)
-    seed_vec = embedder.encode(seed_text.strip(), convert_to_numpy=True)
-    seed_vec = seed_vec.astype(np.float32)
-    norm = np.linalg.norm(seed_vec)
-    if norm > 0:
-        seed_vec = seed_vec / norm
+    seed_vec = _generate_seed_vector(seed_text)
 
     # 3. Calculate reference percentile thresholds
     thresholds = compute_vector_thresholds(
@@ -81,8 +173,6 @@ def create_user(
         p_low=p_low,
         session=session,
     )
-
-    now = datetime.now(timezone.utc)
 
     import secrets
     if not access_token:

@@ -77,7 +77,7 @@ def load_reference_embeddings(
                 e,
             )
 
-    # Fallback to local artifacts
+    # Fallback to local artifacts with minimal memory footprint
     c_path = Path(corpus_path)
     e_path = Path(embeddings_path)
     if not c_path.exists() or not e_path.exists():
@@ -85,10 +85,13 @@ def load_reference_embeddings(
             f"Cannot load reference embeddings: missing {c_path} or {e_path}."
         )
 
-    corpus_df = pd.read_parquet(c_path)
-    all_embeddings = np.load(e_path)
+    # Load only 'is_reference' column to avoid loading text/abstract corpus into RAM
+    corpus_df = pd.read_parquet(c_path, columns=["is_reference"])
     ref_mask = corpus_df["is_reference"].values
-    ref_embs = all_embeddings[ref_mask]
+
+    # Memory-map embeddings.npy to avoid reading the full 10,000 array into heap
+    all_embeddings = np.load(e_path, mmap_mode="r")
+    ref_embs = np.array(all_embeddings[ref_mask], dtype=np.float32)
 
     norms = np.linalg.norm(ref_embs, axis=1, keepdims=True)
     norms[norms == 0] = 1.0
@@ -104,6 +107,7 @@ def compute_vector_thresholds(
 ) -> Thresholds:
     """
     Score the 5,000 reference papers under an interest vector and compute (t_high, t_low).
+    Prioritizes in-database pgvector percentile calculation to consume zero Python RAM.
 
     Args:
         vector: 1D normalized interest vector (length 384).
@@ -121,6 +125,83 @@ def compute_vector_thresholds(
         raise ValueError("Interest vector has zero norm.")
     v = v / norm
 
+    p_h = float(p_high if p_high is not None else config.active_p_high)
+    p_l = float(p_low if p_low is not None else config.active_p_low)
+
+    # 1. Attempt lightweight in-database pgvector percentile computation if PostgreSQL session is available
+    if reference_embeddings is None and session is not None:
+        try:
+            dialect_name = session.bind.dialect.name if session.bind else ""
+            if dialect_name == "postgresql":
+                from sqlalchemy import text
+
+                # Format vector as pgvector literal string: '[x1,x2,...,xd]'
+                vec_str = "[" + ",".join(f"{x:.8f}" for x in v) + "]"
+                p_high_frac = p_h / 100.0
+                p_low_frac = p_l / 100.0
+
+                query = text(
+                    """
+                    SELECT
+                        percentile_cont(:p_high_frac) WITHIN GROUP (
+                            ORDER BY (1.0 - (embedding <=> CAST(:vec_str AS vector)))
+                        ) AS t_high,
+                        percentile_cont(:p_low_frac) WITHIN GROUP (
+                            ORDER BY (1.0 - (embedding <=> CAST(:vec_str AS vector)))
+                        ) AS t_low,
+                        COUNT(*) AS ref_count
+                    FROM papers
+                    WHERE is_reference = TRUE
+                    """
+                )
+                res = session.execute(
+                    query,
+                    {
+                        "p_high_frac": p_high_frac,
+                        "p_low_frac": p_low_frac,
+                        "vec_str": vec_str,
+                    },
+                ).fetchone()
+
+                if (
+                    res
+                    and res[0] is not None
+                    and res[1] is not None
+                    and res[2] >= config.REFERENCE_SAMPLE_SIZE
+                ):
+                    t_h_db = float(res[0])
+                    t_l_db = float(res[1])
+                    ref_count = int(res[2])
+                    logger.info(
+                        "In-database pgvector threshold computation succeeded (0 embeddings transferred to RAM): "
+                        "P_high=%.1f -> t_high=%.4f, P_low=%.1f -> t_low=%.4f (ref_count=%d)",
+                        p_h,
+                        t_h_db,
+                        p_l,
+                        t_l_db,
+                        ref_count,
+                    )
+                    return Thresholds(
+                        p_high=p_h,
+                        p_low=p_l,
+                        t_high=t_h_db,
+                        t_low=t_l_db,
+                    )
+                else:
+                    found_count = int(res[2]) if res and res[2] is not None else 0
+                    logger.warning(
+                        "PostgreSQL has insufficient reference papers (%d < %d required); falling back to file artifacts.",
+                        found_count,
+                        config.REFERENCE_SAMPLE_SIZE,
+                    )
+        except Exception as e:
+            logger.warning(
+                "In-database pgvector threshold computation failed (%s: %s); falling back to client-side scoring.",
+                type(e).__name__,
+                e,
+            )
+
+    # 2. Client-side scoring fallback
     ref_embs = (
         reference_embeddings
         if reference_embeddings is not None
@@ -129,9 +210,6 @@ def compute_vector_thresholds(
 
     # Cosine similarity is dot product because vectors are L2-normalized
     ref_scores = np.dot(ref_embs, v)
-
-    p_h = p_high if p_high is not None else config.active_p_high
-    p_l = p_low if p_low is not None else config.active_p_low
 
     t_h = float(np.percentile(ref_scores, p_h))
     t_l = float(np.percentile(ref_scores, p_l))

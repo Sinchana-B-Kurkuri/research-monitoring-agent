@@ -17,6 +17,7 @@ from pathlib import Path
 import logging
 import subprocess
 import sys
+import time
 from typing import Generator, Optional
 from urllib.parse import parse_qs
 
@@ -31,6 +32,7 @@ from research_monitor.database.models import (
     Digest,
     DigestItem,
     FeedbackEvent,
+    InterestVectorVersion,
     ReviewTask,
     RoutingDecision,
     User,
@@ -190,19 +192,89 @@ async def handle_onboard_user(
             },
         )
 
+    # 0. Check if user already exists and has active vector version (idempotency / retry short-circuit)
+    existing_user = session.query(User).filter_by(id=user_id).first()
+    if existing_user:
+        active_v0 = (
+            session.query(InterestVectorVersion)
+            .filter_by(user_id=existing_user.id)
+            .filter(InterestVectorVersion.is_active.is_(True))
+            .first()
+        )
+        if active_v0 is not None:
+            logger.info(
+                "User '%s' is already registered with an active profile. Returning credentials directly without spawning subprocess.",
+                user_id,
+            )
+            if "application/json" in content_type or request.headers.get("accept", "") == "application/json":
+                return JSONResponse(
+                    content={
+                        "status": "ok",
+                        "user_id": existing_user.id,
+                        "name": existing_user.name,
+                        "access_token": existing_user.access_token,
+                        "review_url": f"/review?token={existing_user.access_token}",
+                        "digest_url": f"/digest?token={existing_user.access_token}",
+                        "audit_url": f"/audit?token={existing_user.access_token}",
+                    }
+                )
+            return templates.TemplateResponse(
+                request=request,
+                name="onboard_success.html",
+                context={
+                    "user": existing_user,
+                    "token": existing_user.access_token,
+                    "active_tab": "onboard",
+                },
+            )
+
     # Execute create_user.py in separate subprocess to preserve web process isolation
-    proc = subprocess.run(
-        [
-            sys.executable,
-            str(CREATE_USER_SCRIPT),
-            "--user-id", user_id,
-            "--name", name,
-            "--seed-text", seed_text,
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    logger.info("Spawning isolated onboarding subprocess for user_id='%s' (name='%s')", user_id, name)
+    start_time = time.perf_counter()
+    try:
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(CREATE_USER_SCRIPT),
+                "--user-id", user_id,
+                "--name", name,
+                "--seed-text", seed_text,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=90,
+        )
+        elapsed = time.perf_counter() - start_time
+        logger.info(
+            "Onboarding subprocess for user_id='%s' completed in %.2fs (returncode=%d)",
+            user_id,
+            elapsed,
+            proc.returncode,
+        )
+    except subprocess.TimeoutExpired:
+        elapsed = time.perf_counter() - start_time
+        logger.error(
+            "Onboarding subprocess for user_id='%s' timed out after %.2fs",
+            user_id,
+            elapsed,
+        )
+        error_msg = "User initialization timed out. Please try again."
+        if "application/json" in content_type or request.headers.get("accept", "") == "application/json":
+            raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail=error_msg)
+        return templates.TemplateResponse(
+            request=request,
+            name="onboard.html",
+            context={
+                "error": error_msg,
+                "form_user_id": user_id,
+                "form_name": name,
+                "form_seed_text": seed_text,
+                "active_tab": "onboard",
+                "token": None,
+                "user": None,
+            },
+        )
 
     if proc.returncode != 0:
         logger.error("User initialization subprocess failed: %s", proc.stderr)
