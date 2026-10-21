@@ -22,6 +22,8 @@ from research_monitor.database.models import (
     InterestProfile,
     InterestVectorVersion,
     User,
+    FeedbackEvent,
+    TrainingLabel,
 )
 from research_monitor.relevance.thresholds import compute_vector_thresholds
 
@@ -72,6 +74,7 @@ def create_user(
     p_low: Optional[float] = None,
     reference_embeddings: Optional[np.ndarray] = None,
     require_new: bool = False,
+    inherit_from_user: Optional[str] = None,
 ) -> User:
     """
     Create a new user, embed their seed paragraph, and initialize version 0 vector.
@@ -224,6 +227,14 @@ def create_user(
         is_active=True,
     )
     session.add(v0)
+    if inherit_from_user:
+        source = session.get(User, inherit_from_user)
+        if source is None or source.id == user.id or (source.is_simulated and not is_simulated):
+            raise ValueError("Choose an existing, non-simulated source profile for preference memory.")
+        for label in session.query(TrainingLabel).filter_by(user_id=source.id).all():
+            session.add(FeedbackEvent(user_id=user.id, paper_id=label.paper_id, label=label.label,
+                source=f"inherited:{source.id}:{label.event_id}", decision_id=None,
+                is_audit=False, created_at=now))
     session.commit()
 
     logger.info(

@@ -105,7 +105,7 @@ class BaseSummarizer(ABC):
         prompt_version: str = DEFAULT_PROMPT_VERSION,
     ) -> str:
         """Format the prompt template for the given version."""
-        template = PROMPT_TEMPLATES.get(prompt_version)
+        template = PROMPT_TEMPLATES.get(prompt_version.split(":memory:", 1)[0])
         if not template:
             raise ValueError(f"Unknown summary prompt version: '{prompt_version}'")
         return template.format(
@@ -137,7 +137,10 @@ class GeminiSummarizer(BaseSummarizer):
                 raise ValueError("Gemini API key is not configured. Set GEMINI_API_KEY environment variable.")
             try:
                 from google import genai
-                self._client = genai.Client(api_key=self.api_key)
+                from google.genai import types
+                self._client = genai.Client(api_key=self.api_key,
+                    http_options=types.HttpOptions(timeout=60000,
+                        retry_options=types.HttpRetryOptions(attempts=2)))
             except Exception as e:
                 # Never expose API key or sensitive details
                 logger.error("Failed to initialize Google GenAI client: %s", type(e).__name__)
@@ -192,11 +195,11 @@ class GeminiSummarizer(BaseSummarizer):
         except Exception as e:
             # Clean logging: never log raw credentials or full trace with secrets
             logger.error(
-                "Gemini summarization failed for model '%s', prompt '%s': %s: %s",
+                "Gemini summarization failed for model '%s', prompt '%s': %s (code=%s)",
                 self.model,
                 prompt_version,
                 type(e).__name__,
-                str(e),
+                getattr(e, "code", None),
             )
             raise
 

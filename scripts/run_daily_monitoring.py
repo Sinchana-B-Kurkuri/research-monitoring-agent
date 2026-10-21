@@ -52,6 +52,7 @@ def execute_daily_cycle_for_user(
     days: int,
     max_digest_items: int = 20,
     papers_override=None,
+    on_progress=None,
 ) -> tuple[str, Optional[int], dict]:
     """
     Execute a single daily monitoring cycle for a given user.
@@ -76,7 +77,23 @@ def execute_daily_cycle_for_user(
     )
 
     state = None
+    preferences_prepared = False
     try:
+        # Feedback often arrives after the preceding cycle has finished. Apply
+        # it before scoring this cycle, rather than one additional cycle later.
+        if on_progress:
+            on_progress("Updating preferences from saved feedback")
+        from research_monitor.relevance.preference import update_user_interest_vector
+        from research_monitor.relevance.classifier import train_and_evaluate_classifier
+        prior_vector = update_user_interest_vector(user_id=user.id, session=session)
+        if prior_vector.status == "error":
+            raise RuntimeError("Saved preference update failed")
+        prior_model = train_and_evaluate_classifier(user_id=user.id, session=session)
+        if prior_model.status == "error":
+            raise RuntimeError("Saved classifier update failed")
+        preferences_prepared = True
+        if on_progress:
+            on_progress("Embedding and routing candidate papers")
         # 2. Run live retrieval, deduplication, embedding, and relevance state machine
         state, ingestion = run_live_cycle(
             user_id=user.id,
@@ -101,6 +118,10 @@ def execute_daily_cycle_for_user(
             "low": counts.get("low", 0),
             "delivered": 0,
         }
+        if prior_vector.status == "updated":
+            metrics["vector_updated"] = prior_vector.version_created
+        if prior_model.status == "promoted":
+            metrics["model_promoted"] = prior_model.version_created
 
         # 3. Determine status tag
         if ingestion.fetched == 0:
@@ -126,6 +147,8 @@ def execute_daily_cycle_for_user(
             )
 
         # 4. Automatically compile digest for auto-cleared HIGH papers & trigger summaries
+        if on_progress:
+            on_progress("Building the digest and generating AI summaries")
         try:
             digest, _ = resume_after_review(
                 user_id=user.id,
@@ -138,6 +161,8 @@ def execute_daily_cycle_for_user(
             raise RuntimeError("Digest assembly failed") from digest_err
 
         # 5. Evaluate preference vector update for next cycle (Phase 10)
+        if on_progress:
+            on_progress("Applying saved preference feedback for future sessions")
         try:
             from research_monitor.relevance.preference import update_user_interest_vector
             vec_res = update_user_interest_vector(user_id=user.id, session=session)
@@ -205,6 +230,8 @@ def execute_daily_cycle_for_user(
         session.rollback()
         if state is not None:
             record_cycle_failure(session, user.id, "live", end_date, exc, state.cycle_id)
+        elif not preferences_prepared:
+            record_cycle_failure(session, user.id, "live", end_date, exc)
         return status_tag, None, {"error": str(exc)}
 
 

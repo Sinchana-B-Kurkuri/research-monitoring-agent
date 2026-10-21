@@ -53,6 +53,7 @@ def main() -> None:
     )
     parser.add_argument("--require-new", action="store_true", help="Fail rather than return credentials for an existing user.")
     parser.add_argument("--skip-db-init", action="store_true", help="Use the already initialized database (web onboarding); do not run schema migrations.")
+    parser.add_argument("--inherit-from-user", default=None, help="Explicitly copy effective preference memory from this profile; imported feedback is marked separately.")
     args = parser.parse_args()
 
     seed_text = args.seed_text or config.SEED_INTEREST
@@ -78,6 +79,7 @@ def main() -> None:
             session=session,
             is_simulated=args.is_simulated,
             require_new=args.require_new,
+            inherit_from_user=args.inherit_from_user,
         )
         logger.info("User entity and vector setup completed in %.2fs", time.perf_counter() - t_user)
 

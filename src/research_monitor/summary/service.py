@@ -131,6 +131,11 @@ def summarize_decision(
         raise PermissionError(reason)
 
     active_prompt_version = prompt_version or config.SUMMARY_PROMPT_VERSION or DEFAULT_PROMPT_VERSION
+    from sqlalchemy import func
+    from research_monitor.database.models import TrainingLabel
+    memory_event = session.query(func.max(TrainingLabel.event_id)).filter_by(user_id=user_id).scalar()
+    if memory_event is not None:
+        active_prompt_version = f"{active_prompt_version}:memory:{memory_event}"
     active_summarizer = summarizer or get_summarizer()
     model_name = getattr(active_summarizer, "model", config.LLM_MODEL)
 
@@ -196,6 +201,18 @@ def summarize_decision(
     if not paper:
         raise ValueError(f"Paper '{decision.paper_id}' associated with decision {decision_id} not found.")
 
+    # Preference examples guide the framing; they are not evidence about the
+    # target paper. Preserve historical summaries rather than rewriting them.
+    from research_monitor.relevance.classifier import find_nearest_feedback_papers
+    liked, rejected = find_nearest_feedback_papers(paper.embedding, user_id, session)
+    examples = []
+    if liked:
+        examples.append(f"Previously useful paper: {liked['title']}")
+    if rejected:
+        examples.append(f"Previously less useful paper: {rejected['title']}")
+    if examples:
+        user_interests += "\nPreference memory (use only to choose emphasis, never as facts about this paper):\n" + "\n".join(examples)
+
     # 6. Execute LLM generation
     try:
         result = active_summarizer.generate_summary(
@@ -206,11 +223,11 @@ def summarize_decision(
         )
     except Exception as e:
         logger.warning(
-            "Summarization failed for decision %d (paper %s): %s: %s. Preserving SUMMARIZE_PENDING for retry.",
+            "Summarization failed for decision %d (paper %s): %s (code=%s). Preserving SUMMARIZE_PENDING for retry.",
             decision_id,
             decision.paper_id,
             type(e).__name__,
-            str(e),
+            getattr(e, "code", None),
         )
         # Ensure retryable state: preserve or set SUMMARIZE_PENDING
         if decision.status != DecisionStatus.REACTED.value:
