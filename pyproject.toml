@@ -16,4 +16,4 @@ dependencies = {file = ["requirements.txt"]}
 where = ["src"]
 
 [tool.setuptools.package-data]
-"research_monitor.ui" = ["templates/*.html"]
+"research_monitor.ui" = ["templates/*.html", "static/*"]

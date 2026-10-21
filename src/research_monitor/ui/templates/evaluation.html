@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Evaluation · {{ user.name }}{% endblock %}
+{% block content %}
+<h1 class="page-title">Evaluation & preference memory</h1>
+<div class="card"><h2>This profile's activity</h2><p>{{ stats.cycles }} monitoring sessions · {{ stats.digests }} digests · {{ stats.summaries }} saved summaries</p><p>{{ stats.labels }} effective labels: {{ stats.positive }} positive, {{ stats.negative }} negative; {{ stats.inherited }} inherited.</p><p class="page-subtitle">Feedback is persistent. The first interest-vector update requires 10 effective labels including 3 positives; classifier training requires 30 labels including 8 of each class. Small feedback sets remain saved until these safeguards are met.</p></div>
+<div class="card"><h2>Evaluate available evidence</h2><p>Run the shared research benchmark on currently human-labeled papers and produce operational reports now. This benchmark uses the project's reference research topic; it is separate from this profile's personal feedback.</p><p class="page-subtitle">Missing human labels never stop monitoring or summaries. Partial benchmark results are clearly scoped to the labeled subset; they do not certify a completed pilot study.</p>
+<form action="/jobs?token={{ token }}" method="post" data-job-form><input type="hidden" name="kind" value="evaluation"><button class="btn btn-primary" type="submit">Evaluate available data</button></form><div id="job-progress" role="status" class="reason-box" hidden></div></div>
+{% if job %}<div class="card"><h2>Latest evaluation: {{ job.status }}</h2>{% if job.status in ['queued','running'] %}<p data-active-job="{{ job.id }}">{{ job.phase }}</p>{% else %}<p>{{ job.error or job.phase }}</p>{% endif %}
+{% if job.result %}<p>Report: {{ job.result.status }}</p><p>Benchmark: {{ job.result.e1.status }}</p><p>{{ job.result.e1.message or '' }}</p><p>Human-label coverage: {{ job.result.label_coverage.get('labeled', 0) }} / {{ job.result.label_coverage.get('total', 0) }}</p><p>Final research evidence complete: {{ 'Yes' if job.result.numbers_frozen else 'No; available-data results are still usable' }}</p>
+{% for row in job.result.benchmark_rows or [] %}<details class="card"><summary>{{ row.get('model_or_baseline', row.get('method', row.get('baseline', 'Benchmark result'))) }}</summary><dl>{% for key,value in row.items() %}<dt><strong>{{ key|replace('_',' ') }}</strong></dt><dd>{{ value }}</dd>{% endfor %}</dl></details>{% endfor %}{% endif %}</div>{% endif %}
+{% include "_job_controls.html" %}
+{% endblock %}

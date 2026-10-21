@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}History · {{ user.name }}{% endblock %}
+{% block content %}
+<h1 class="page-title">Monitoring & feedback history</h1><p class="page-subtitle">Saved records for {{ user.name }}. Empty and failed sessions remain visible.</p>
+{% for cycle in cycles %}{% set counts = cycle.counts or {} %}<div class="card"><h3>Session #{{ cycle.id }} · {{ cycle.mode }} · {{ cycle.as_of_date }}</h3><p>{{ 'Failed' if counts.get('error') else counts.get('status', 'completed' if cycle.finished_at else 'unfinished') }}</p><p>{{ counts.get('discovered', 0) }} discovered · {{ counts.get('high',0) }} HIGH · {{ counts.get('borderline',0) }} BORDERLINE · {{ counts.get('low',0) }} LOW</p><div class="btn-group"><a href="/history/{{ cycle.id }}?token={{ token }}">All routing decisions</a><a href="/digest?token={{ token }}&cycle_id={{ cycle.id }}">Open this digest</a></div></div>{% else %}<p>No monitoring cycles yet. Use Start monitoring session on your dashboard.</p>{% endfor %}
+<div class="btn-group">{% if page > 1 %}<a href="/history?token={{ token }}&page={{ page-1 }}">Newer sessions</a>{% endif %}{% if has_more %}<a href="/history?token={{ token }}&page={{ page+1 }}">Older sessions</a>{% endif %}</div>
+<h2 style="margin-top:2rem;">Latest feedback events</h2><p class="page-subtitle">Events are retained even if you later change your reaction. Imported memory is identified by its source.</p>
+{% for event in events %}<div class="card"><strong>{{ event.paper.title }}</strong><p>{{ 'Positive' if event.label == 1 else 'Negative' }} · {{ event.source }} · {{ event.created_at.strftime('%Y-%m-%d %H:%M UTC') }}</p></div>{% else %}<p>No feedback saved yet.</p>{% endfor %}
+<div class="btn-group">{% if feedback_page > 1 %}<a href="?token={{ token }}&feedback_page={{ feedback_page-1 }}">Newer feedback</a>{% endif %}{% if feedback_more %}<a href="?token={{ token }}&feedback_page={{ feedback_page+1 }}">Older feedback</a>{% endif %}</div>
+<h2>Processing jobs</h2>{% for job in jobs %}<p>{{ job.created_at.strftime('%Y-%m-%d %H:%M UTC') }} · {{ job.kind }} · {{ job.status }} · {{ job.error or job.phase }}</p>{% endfor %}
+<div class="btn-group">{% if jobs_page > 1 %}<a href="?token={{ token }}&jobs_page={{ jobs_page-1 }}">Newer jobs</a>{% endif %}{% if jobs_more %}<a href="?token={{ token }}&jobs_page={{ jobs_page+1 }}">Older jobs</a>{% endif %}</div>
+{% endblock %}

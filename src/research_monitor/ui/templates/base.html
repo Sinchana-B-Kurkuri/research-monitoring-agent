@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Research Monitor{% endblock %}</title>
     <!-- HTMX -->
-    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+    <script src="/static/htmx.min.js"></script>
     <style>
         :root {
             --bg: #0f172a;
@@ -414,6 +414,11 @@
         .summary-text { white-space: pre-line; }
         .card-title, .card-meta, .summary-text { overflow-wrap: anywhere; }
         .btn-group, .badges { flex-wrap: wrap; }
+        a { color: var(--primary); }
+        .btn { text-decoration: none; }
+        nav { flex-wrap: wrap; }
+        input, select { font: inherit; color: var(--text-primary); background: var(--bg); border: 1px solid var(--border); border-radius: 5px; padding: .55rem; max-width: 100%; }
+        form label { display: grid; gap: .35rem; }
         @media (max-width: 640px) {
             header, .page-header, .card-header { flex-direction: column; align-items: flex-start; gap: 0.75rem; }
             header { position: static; padding: 1rem; }
@@ -432,10 +437,15 @@
             {% endif %}
         </div>
         <nav>
+            <a href="/onboard">← Pilots & initialization</a>
+            <a href="/workspace" class="{% if active_tab == 'workspace' %}active{% endif %}">Workspace</a>
             {% if token %}
+            <a href="/dashboard?token={{ token }}" class="{% if active_tab == 'dashboard' %}active{% endif %}">Dashboard</a>
             <a href="/review?token={{ token }}" class="{% if active_tab == 'review' %}active{% endif %}">Review Queue</a>
             <a href="/digest?token={{ token }}" class="{% if active_tab == 'digest' %}active{% endif %}">Digest</a>
             <a href="/audit?token={{ token }}" class="{% if active_tab == 'audit' %}active{% endif %}">Audit (Low)</a>
+            <a href="/history?token={{ token }}" class="{% if active_tab == 'history' %}active{% endif %}">History</a>
+            <a href="/evaluation?token={{ token }}" class="{% if active_tab == 'evaluation' %}active{% endif %}">Evaluation</a>
             {% else %}
             <a href="/onboard" class="{% if active_tab == 'onboard' %}active{% endif %}">Pilot Onboarding</a>
             {% endif %}
@@ -448,7 +458,7 @@
     </main>
 
     <footer>
-        Relevance-Gated Agentic Workflow &bull; Phase 6 Human Review & Digest UI
+        Research Monitor · Personalized papers, review, summaries, and saved preference memory
     </footer>
     <script>
         document.body.addEventListener('htmx:beforeRequest', function (event) {

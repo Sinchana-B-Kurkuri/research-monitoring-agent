@@ -26,11 +26,13 @@ from urllib.parse import parse_qs
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy import text
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from research_monitor.config import config
+from research_monitor.ui.workspace import active_token, accessible_profiles, is_operator, remember_profile
 
 from research_monitor.database.models import (
     Cycle,
@@ -57,7 +59,7 @@ class AccessTokenLogFilter(logging.Filter):
         def redact(value):
             if not isinstance(value, str):
                 return value
-            value = re.sub(r"([?&]token=)[^&\s]*", r"\1[REDACTED]", value)
+            value = re.sub(r"([?&](?:token|workspace_key)=)[^&\s]*", r"\1[REDACTED]", value)
             return re.sub(r"(/(?:review|digest|audit)/)[^/?\s]+(?=\?|$)", r"\1[REDACTED]", value)
         if isinstance(record.args, tuple):
             record.args = tuple(redact(value) for value in record.args)
@@ -76,13 +78,22 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 CREATE_USER_SCRIPT = PROJECT_ROOT / "scripts" / "create_user.py"
 
 app = FastAPI(title="Research Monitor UI", version="0.9.0")
+app.mount("/static", StaticFiles(directory=str(TEMPLATES_DIR.parent / "static")), name="static")
 
 
 @app.middleware("http")
 async def protect_personal_links(request, call_next):
+    if request.method not in {"GET", "HEAD", "OPTIONS"}:
+        origin = request.headers.get("origin")
+        if request.headers.get("sec-fetch-site") == "cross-site" or (origin and origin != str(request.base_url).rstrip("/")):
+            return JSONResponse({"detail": "Cross-site actions are not allowed."}, status_code=403)
     response = await call_next(request)
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Frame-Options"] = "DENY"
+    token = getattr(request.state, "profile_token", None)
+    if token:
+        remember_profile(response, request, token)
     return response
 
 
@@ -135,14 +146,16 @@ def root_page(
     - If valid user token provided in query, redirect to their digest.
     - Otherwise, redirect to cold-start pilot onboarding.
     """
+    token = token or active_token(request)
     if token and token.strip():
         user = session.query(User).filter_by(access_token=token.strip()).first()
         if user:
+            request.state.profile_token = token.strip()
             return RedirectResponse(
-                url=f"/digest?token={token.strip()}",
+                url=f"/dashboard?token={token.strip()}",
                 status_code=status.HTTP_302_FOUND,
             )
-    return RedirectResponse(url="/onboard", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(url="/workspace" if is_operator(request) else "/onboard", status_code=status.HTTP_302_FOUND)
 
 
 # =========================================================================
@@ -150,8 +163,10 @@ def root_page(
 # =========================================================================
 
 @app.get("/onboard", response_class=HTMLResponse)
-def onboard_page(request: Request):
+def onboard_page(request: Request, session: Session = Depends(get_db)):
     """Render cold-start pilot researcher onboarding form."""
+    from research_monitor.ui.portal import profile_cards
+    cards = profile_cards(request, session)
     return templates.TemplateResponse(
         request=request,
         name="onboard.html",
@@ -159,6 +174,8 @@ def onboard_page(request: Request):
             "active_tab": "onboard",
             "token": None,
             "user": None,
+            "cards": cards,
+            "operator": is_operator(request),
         },
     )
 
@@ -178,6 +195,7 @@ async def handle_onboard_user(
     user_id = ""
     name = ""
     seed_text = ""
+    inherit_from_user = ""
 
     content_type = request.headers.get("content-type", "")
     if "application/json" in content_type:
@@ -186,6 +204,7 @@ async def handle_onboard_user(
             user_id = str(data.get("user_id", "")).strip()
             name = str(data.get("name", "")).strip()
             seed_text = str(data.get("seed_text", "")).strip()
+            inherit_from_user = str(data.get("inherit_from_user", "")).strip()
         except Exception:
             pass
     else:
@@ -194,6 +213,7 @@ async def handle_onboard_user(
         user_id = parsed.get("user_id", [""])[0].strip()
         name = parsed.get("name", [""])[0].strip()
         seed_text = parsed.get("seed_text", [""])[0].strip()
+        inherit_from_user = parsed.get("inherit_from_user", [""])[0].strip()
 
     # Query params fallback
     if not user_id:
@@ -224,12 +244,15 @@ async def handle_onboard_user(
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", user_id) or len(name) > 200 or len(seed_text) > 10000:
         raise HTTPException(status_code=400, detail="Invalid user identifier or input too long.")
     existing_user = session.query(User).filter_by(id=user_id).first()
+    if inherit_from_user and inherit_from_user not in {profile.id for profile in accessible_profiles(request, session) if not profile.is_simulated}:
+        raise HTTPException(403, "Choose a source profile that you can access in this workspace.")
     if existing_user:
         supplied_token = request.query_params.get("token", "")
         if not existing_user.access_token or not secrets.compare_digest(supplied_token, existing_user.access_token):
             raise HTTPException(status_code=409, detail="User ID already registered. Use your existing personal access link.")
         active = session.query(InterestVectorVersion).filter_by(user_id=user_id, is_active=True).first()
         if active is not None:
+            request.state.profile_token = existing_user.access_token
             return JSONResponse(content={
                 "status": "ok", "user_id": existing_user.id, "name": existing_user.name,
                 "access_token": existing_user.access_token,
@@ -255,6 +278,7 @@ async def handle_onboard_user(
                 "--name", name,
                 "--seed-text", seed_text,
                 "--skip-db-init",
+                *(["--inherit-from-user", inherit_from_user] if inherit_from_user else []),
                 *(["--require-new"] if existing_user is None else []),
             ],
             capture_output=True,
@@ -320,6 +344,8 @@ async def handle_onboard_user(
             detail="User was initialized by script but not found in active database.",
         )
 
+    request.state.profile_token = user.access_token
+
     if "application/json" in content_type or request.headers.get("accept", "") == "application/json":
         return JSONResponse(
             content={
@@ -347,10 +373,13 @@ async def handle_onboard_user(
 def authenticate_user(
     token: Optional[str] = Query(None),
     session: Session = Depends(get_db),
+    request: Request = None,
 ) -> tuple[User, str]:
     """
     Validate per-user URL access token without logging or leaking secrets.
     """
+    if token is None and request is not None:
+        token = active_token(request)
     if not token or not token.strip():
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -365,6 +394,8 @@ def authenticate_user(
             detail="Access denied: Invalid access token.",
         )
 
+    if request is not None:
+        request.state.profile_token = token.strip()
     return user, token.strip()
 
 
@@ -395,6 +426,7 @@ def review_page_path(
 
 
 def _render_review_page(request: Request, user: User, token: str, session: Session) -> HTMLResponse:
+    request.state.profile_token = token
     from research_monitor.review.queue import expire_stale_tasks
     expire_stale_tasks(user.id, session)
     # Fetch pending review tasks for this user, ordered by score DESC
@@ -531,6 +563,7 @@ def _render_digest_page(
     cycle_id: Optional[int],
     session: Session,
 ) -> HTMLResponse:
+    request.state.profile_token = token
     query = session.query(Digest).options(
         selectinload(Digest.items).joinedload(DigestItem.routing_decision).joinedload(RoutingDecision.paper),
         selectinload(Digest.items).joinedload(DigestItem.routing_decision).joinedload(RoutingDecision.summary),
@@ -669,6 +702,7 @@ def audit_page_path(
 
 
 def _render_audit_page(request: Request, user: User, token: str, session: Session) -> HTMLResponse:
+    request.state.profile_token = token
     # Fetch discarded LOW papers for this user
     decisions = (
         session.query(RoutingDecision)
@@ -692,3 +726,7 @@ def _render_audit_page(request: Request, user: User, token: str, session: Sessio
             "active_tab": "audit",
         },
     )
+
+
+from research_monitor.ui.portal import create_portal_router
+app.include_router(create_portal_router(templates, get_db, authenticate_user))

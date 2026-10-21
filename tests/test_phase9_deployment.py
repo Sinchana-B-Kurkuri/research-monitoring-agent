@@ -159,7 +159,7 @@ def test_root_redirect_with_valid_token(client, sample_pilot_user):
     """Navigating to /?token=... with a valid user token redirects to their digest."""
     response = client.get(f"/?token={sample_pilot_user.access_token}", follow_redirects=False)
     assert response.status_code == 302
-    assert response.headers["location"] == f"/digest?token={sample_pilot_user.access_token}"
+    assert response.headers["location"] == f"/dashboard?token={sample_pilot_user.access_token}"
 
 
 # =========================================================================

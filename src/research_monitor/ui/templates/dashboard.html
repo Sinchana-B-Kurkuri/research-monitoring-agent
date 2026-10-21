@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}{{ user.name }} · Dashboard{% endblock %}
+{% block content %}
+<a href="/onboard">← Back to pilots & initialization</a>
+<div class="page-header" style="margin-top:1rem;"><div><h1 class="page-title">{{ user.name }}</h1><p class="page-subtitle">Profile {{ user.id }} · Your links, monitoring controls, and saved memory</p></div></div>
+<div class="card"><h2>Research interests</h2><p class="card-abstract">{{ profile.seed_text if profile else 'No interests saved' }}</p>
+<p>{{ stats.cycles }} monitoring sessions · {{ stats.digests }} digests · {{ stats.summaries }} summaries</p>
+<p>{{ stats.labels }} effective preference labels ({{ stats.positive }} positive, {{ stats.negative }} negative; {{ stats.inherited }} explicitly inherited).</p>
+{% if vector %}<p class="card-meta">Active interest vector v{{ vector.version }} · {{ vector.method }}. Feedback is saved immediately; preference updates apply to future monitoring sessions when sufficient evidence is available.</p>{% endif %}
+<div class="btn-group"><a class="btn btn-primary" href="/digest?token={{ token }}">Digest</a><a class="btn btn-skip" href="/review?token={{ token }}">Review queue</a><a class="btn btn-skip" href="/history?token={{ token }}">Full history</a><a class="btn btn-skip" href="/evaluation?token={{ token }}">Evaluation</a></div></div>
+<section class="card"><h2>Start a monitoring session</h2><p class="page-subtitle">Fetch recent papers, filter them for this profile, generate eligible summaries, and evaluate saved feedback. This continues in the background if you navigate away.</p>
+<form action="/jobs?token={{ token }}" method="post" data-job-form style="display:grid;gap:1rem;margin-top:1rem;">
+<input type="hidden" name="kind" value="monitor">
+<label>arXiv categories <input required name="categories" list="category-presets" value="{{ settings.categories|join(',') }}"></label>
+<datalist id="category-presets"><option value="cs.CL,cs.LG,cs.AI">AI and language models</option><option value="cs.RO,cs.CV">Robotics and computer vision</option><option value="cond-mat.mtrl-sci,physics.app-ph">Materials science and applied physics</option></datalist>
+<p class="card-meta">Choose a category preset or enter your own codes. Your interests personalize filtering within the retrieved papers. <a href="https://arxiv.org/category_taxonomy" target="_blank" rel="noopener">arXiv category guide</a></p>
+<label>Recent days <input name="days" type="number" min="1" max="30" value="{{ settings.days }}" required></label>
+<label>Maximum papers <input name="max_results" type="number" min="1" max="50" value="{{ settings.max_results }}" required></label>
+<button class="btn btn-primary" type="submit">Start monitoring session</button>
+</form>
+<div id="job-progress" role="status" class="reason-box" style="margin-top:1rem;" hidden></div>
+</section>
+<h2>Recent processing sessions</h2>
+{% for job in jobs %}<div class="card"><strong>{{ job.kind|capitalize }} · {{ job.status }}</strong><p class="card-meta">{{ job.created_at.strftime('%Y-%m-%d %H:%M UTC') }}</p>
+{% if job.status in ['queued','running'] %}<p role="status" data-active-job="{{ job.id }}">{{ job.phase }}</p>{% else %}<p>{{ job.error or job.phase }}</p>{% endif %}
+{% if job.result and job.kind == 'monitor' %}<p>{{ job.result.metrics.fetched }} fetched · {{ job.result.metrics.total_routed }} newly routed for this profile · {{ job.result.metrics.high }} HIGH · {{ job.result.metrics.borderline }} BORDERLINE · {{ job.result.metrics.low }} LOW · {{ job.result.metrics.delivered }} delivered · {{ job.result.metrics.pending_summaries }} summaries pending</p>{% if job.result.metrics.pending_summaries %}<p class="reason-box">Some AI summaries are waiting for a successful provider response. Original abstracts are available; use Retry Summaries in the digest.</p>{% endif %}{% endif %}
+{% if job.cycle_id %}<div class="btn-group"><a href="/history/{{ job.cycle_id }}?token={{ token }}">Session details</a><a href="/digest?token={{ token }}&cycle_id={{ job.cycle_id }}">This session's digest</a></div>{% endif %}</div>
+{% else %}<div class="empty-state">No browser processing sessions yet. Existing monitoring history is available in Full history.</div>{% endfor %}
+{% include "_job_controls.html" %}
+{% endblock %}

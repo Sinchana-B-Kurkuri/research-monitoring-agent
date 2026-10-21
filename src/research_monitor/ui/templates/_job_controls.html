@@ -1,0 +1,30 @@
+<script>
+(() => {
+    const token = {{ token|tojson }};
+    async function poll(id, box) {
+        try {
+            const response = await fetch('/jobs/' + encodeURIComponent(id) + '?token=' + encodeURIComponent(token));
+            if (!response.ok) throw new Error('Unable to load session progress. Refresh to try again.');
+            const job = await response.json();
+            box.textContent = job.phase + (job.error ? ': ' + job.error : '');
+            if (job.status === 'queued' || job.status === 'running') setTimeout(() => poll(id, box), 3000);
+            else location.reload();
+        } catch (error) { box.textContent = error.message; }
+    }
+    document.querySelectorAll('[data-active-job]').forEach(box => poll(box.dataset.activeJob, box));
+    document.querySelectorAll('form[data-job-form]').forEach(form => form.addEventListener('submit', async event => {
+        event.preventDefault();
+        const button = form.querySelector('button[type="submit"]');
+        const box = document.getElementById('job-progress');
+        button.disabled = true;
+        box.hidden = false;
+        box.textContent = 'Starting session...';
+        try {
+            const response = await fetch(form.action, {method:'POST', body:new URLSearchParams(new FormData(form)), headers:{'Accept':'application/json'}});
+            const job = await response.json();
+            if (!response.ok) throw new Error(typeof job.detail === 'string' ? job.detail : 'Unable to start this session.');
+            poll(job.id, box);
+        } catch (error) { box.textContent = error.message; button.disabled = false; }
+    }));
+})();
+</script>

@@ -4,7 +4,7 @@ Research monitoring with arXiv ingestion, normalized 384-dimensional embeddings,
 
 The existing architecture is retained: a Python state machine, FastAPI/Jinja2/HTMX, PostgreSQL/pgvector, Rocchio updates, and guarded logistic regression.
 
-**Start with [the backend repair and verification guide](docs/BACKEND_REPAIRS.md).** It contains the diagnostics, fix plan, PowerShell commands, expected output, and commit history. [The earlier codebase analysis](docs/CODEBASE_ANALYSIS.md) records the pre-repair findings.
+**Start with [the dashboard workflow guide](docs/DASHBOARD_WORKFLOW.md).** It explains the private pilot directory, saved links, browser monitoring buttons, history, preference imports, and available-data evaluation. [Backend repairs](docs/BACKEND_REPAIRS.md) contains diagnostics and terminal verification commands. [The earlier codebase analysis](docs/CODEBASE_ANALYSIS.md) records the pre-repair findings.
 
 ## Quick start
 
@@ -25,6 +25,8 @@ Set DATABASE_URL in .env before initialization. The default Compose URL is postg
 
 Save the personal review/digest/audit links printed by create_user.py. Missing tokens return 401, foreign resources return 403, and anonymous registration using an existing user ID returns 409. Access logs redact bearer tokens.
 
+The web launcher also prints a private operator workspace link. Open it once to recover all local profiles and their personal links in your browser. Each profile's Dashboard now starts monitoring with a button, retains background progress, and links to paginated session/feedback history. Returning to Pilots & initialization preserves accessible profiles. Optional preference inheritance copies effective feedback only from a source profile you explicitly choose.
+
 ## Monitoring and summaries
 
 ```powershell
@@ -41,9 +43,9 @@ CALIBRATION_PATH defaults to data/calibrated_thresholds.json. Valid development 
 
 ## Verification and data limits
 
-The repaired suite passed **248 tests with no skips** against disposable PostgreSQL. Set TEST_DATABASE_URL explicitly to run PostgreSQL tests; tests never use the application's .env database URL. Generated test outputs go into temporary directories. See the guide for commands.
+The repaired suite passed **265 tests with no skips** against disposable PostgreSQL. Set TEST_DATABASE_URL explicitly to run PostgreSQL tests; tests never use the application's .env database URL or its live Gemini credential. Generated test outputs go into temporary directories. See the guide for commands.
 
-The local sample currently contains **171 human labels out of 500 papers**. Final E1 reports BLOCKED_INCOMPLETE_DATA for the remaining 329 instead of inventing negatives. Phase 13 exits 2 when E1 is blocked, 1 on an evaluation error, and 0 when the requested analysis ran. Always inspect numbers_frozen to determine pilot completion.
+The local sample currently contains **171 human labels out of 500 papers**. The Evaluation screen and default Phase 13 CLI produce available-data reports with explicit labeled-subset coverage. Add `--strict` to require the complete frozen sample for final research claims. Missing labels never become artificial negatives or disable application use. Phase 13 exits 2 when strict E1 is blocked, 1 on an evaluation error, and 0 when the requested analysis ran. Always inspect numbers_frozen to determine final evidence completion.
 
 Explicit heuristic simulations use --simulated-oracle and record a run manifest. E5 is a theoretical token/cost calculation; E6 is ideal oracle review. Neither is measured human pilot evidence. Offline classifier ablations deliberately differ from the live promotion guard. Use a separate --results-dir for new analysis.
 

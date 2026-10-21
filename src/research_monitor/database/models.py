@@ -11,6 +11,7 @@ from sqlalchemy import (
     LargeBinary,
     UniqueConstraint,
     ForeignKey,
+    Index,
 )
 from sqlalchemy.orm import declarative_base, synonym, relationship
 from pgvector.sqlalchemy import Vector
@@ -101,6 +102,7 @@ class User(Base):
     cycles = relationship("Cycle", back_populates="user", cascade="all, delete-orphan")
     routing_decisions = relationship("RoutingDecision", back_populates="user", cascade="all, delete-orphan")
     summaries = relationship("Summary", back_populates="user", cascade="all, delete-orphan")
+    background_jobs = relationship("BackgroundJob", back_populates="user", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<User(id='{self.id}', name='{self.name}', is_simulated={self.is_simulated})>"
@@ -421,6 +423,28 @@ class FeedbackEvent(Base):
 
     def __repr__(self):
         return f"<FeedbackEvent(id={self.id}, user_id='{self.user_id}', paper_id='{self.paper_id}', source='{self.source}', label={self.label})>"
+
+
+class BackgroundJob(Base):
+    """Durable status for browser-triggered workers; processing stays in scripts."""
+    __tablename__ = "background_jobs"
+    id = Column(String, primary_key=True)
+    user_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    kind = Column(String, nullable=False)
+    status = Column(String, nullable=False, default="queued")
+    phase = Column(String, nullable=False, default="Waiting to start")
+    options = Column(JSON, nullable=False, default=dict)
+    result = Column(JSON, nullable=True)
+    error = Column(Text, nullable=True)
+    worker_pid = Column(Integer, nullable=True)
+    cycle_id = Column(Integer, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    finished_at = Column(DateTime(timezone=True), nullable=True)
+    user = relationship("User", back_populates="background_jobs")
+    __table_args__ = (Index("uq_active_background_job", "user_id", "kind", unique=True,
+        postgresql_where=status.in_(["queued", "running"]),
+        sqlite_where=status.in_(["queued", "running"])),)
 
 
 class TrainingLabel(Base):

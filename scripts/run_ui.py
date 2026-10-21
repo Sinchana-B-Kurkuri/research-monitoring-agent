@@ -29,7 +29,15 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    # Add the browser-job status table on upgrade without rerunning unrelated
+    # legacy migrations while web requests may be using the database.
+    from research_monitor.database.models import BackgroundJob
+    from research_monitor.database.session import engine
+    BackgroundJob.__table__.create(engine, checkfirst=True)
+
     print(f"Starting Research Monitor web server at http://{args.host}:{args.port}")
+    from research_monitor.ui.workspace import workspace_key
+    print(f"Private operator workspace: http://127.0.0.1:{args.port}/workspace?workspace_key={workspace_key()}")
     print("Authenticate by visiting:")
     print(f"  http://{args.host}:{args.port}/review?token=<your_access_token>")
     print(f"  http://{args.host}:{args.port}/digest?token=<your_access_token>")

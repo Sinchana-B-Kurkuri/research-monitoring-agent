@@ -3,6 +3,7 @@
 {% block title %}Cold-Start Pilot Onboarding &bull; Research Monitor{% endblock %}
 
 {% block content %}
+{% include "_profile_directory.html" %}
 <div style="max-width: 720px; margin: 2rem auto; padding: 0 1rem;">
     <div style="background-color: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 2rem; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);">
         
@@ -32,6 +33,14 @@
         {% endif %}
 
         <form id="onboard-form" action="/onboard" method="POST" style="display: flex; flex-direction: column; gap: 1.25rem;">
+            {% if cards %}
+            <label>Preference memory for this new pilot
+                <select name="inherit_from_user"><option value="">Start with fresh preferences</option>
+                    {% for card in cards if not card.user.is_simulated %}<option value="{{ card.user.id }}">Continue from {{ card.user.name }} ({{ card.labels }} labels)</option>{% endfor %}
+                </select>
+                <small class="page-subtitle">Optional: copy effective feedback from a profile you own. Imported memory remains identified separately from new human feedback.</small>
+            </label>
+            {% endif %}
             <div>
                 <label for="user_id" style="display: block; font-size: 0.9rem; font-weight: 600; color: var(--text-primary); margin-bottom: 0.4rem;">
                     User Identifier <span style="color: var(--primary);">*</span>

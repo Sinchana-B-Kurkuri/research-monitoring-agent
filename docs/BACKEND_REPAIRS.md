@@ -2,6 +2,8 @@
 
 21 October 2026. Work is on `codex/backend-repairs`. Nothing was pushed to GitHub. The existing module layout, state machine, database entities, and web/worker split were retained.
 
+The later browser-workflow release is documented in [DASHBOARD_WORKFLOW.md](DASHBOARD_WORKFLOW.md): private pilot directory, saved links, monitoring buttons, history, explicit preference transfer, and available-data evaluation. Historical strict-evaluation observations below retain their original meaning; the CLI now offers available-data reports by default and `--strict` for complete-sample requirements.
+
 ## Diagnostic summary and solution plan
 
 The original isolated suite passed 217 tests and skipped eight PostgreSQL tests. Passing tests concealed module-boundary failures; some tests explicitly asserted unsafe behavior. The repair plan was to preserve the supplied work, add regressions, repair storage/startup, secure authentication and review transitions, reconcile digest delivery/retry, constrain monitoring inputs, and correct evaluation validity before final verification.
@@ -166,7 +168,7 @@ The repair verification used a separately created container named `research-moni
 ## 6. Evaluate without replacing historical evidence
 
 ```powershell
-.\venv\Scripts\python.exe scripts/run_phase13_evaluation.py --results-dir data/verified_evaluation/results --export-dir data/verified_evaluation/export --survey-dir data/surveys --figures
+.\venv\Scripts\python.exe scripts/run_phase13_evaluation.py --strict --results-dir data/verified_evaluation/results --export-dir data/verified_evaluation/export --survey-dir data/surveys --figures
 $LASTEXITCODE
 ```
 

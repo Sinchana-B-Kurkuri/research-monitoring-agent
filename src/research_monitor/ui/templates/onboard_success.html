@@ -69,11 +69,13 @@
                 Run Your First Daily Monitoring Cycle
             </h4>
             <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.75rem;">
-                Run this command in PowerShell or terminal to fetch the latest arXiv submissions for your interests:
+                Start a monitoring session now, or open your dashboard to choose categories and date range. Your links are remembered in this browser.
             </p>
-            <div style="background: #0f172a; border: 1px solid var(--border); padding: 0.75rem 1rem; border-radius: 6px; font-family: monospace; font-size: 0.9rem; color: var(--primary); overflow-x: auto;">
-                python scripts/run_daily_monitoring.py --user-id {{ user.id }} --once
-            </div>
+            <form action="/jobs?token={{ user.access_token }}" method="post" class="btn-group">
+                <input type="hidden" name="kind" value="monitor">
+                <button class="btn btn-primary" type="submit">Start monitoring session</button>
+                <a class="btn btn-skip" href="/dashboard?token={{ user.access_token }}">Dashboard & settings</a>
+            </form>
         </div>
 
     </div>

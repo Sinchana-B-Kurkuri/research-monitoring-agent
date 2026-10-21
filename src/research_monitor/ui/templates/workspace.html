@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}Pilot Workspace · Research Monitor{% endblock %}
+{% block content %}
+<div class="page-header"><div><h1 class="page-title">Pilot workspace</h1><p class="page-subtitle">{{ 'Private operator view: all profiles on this installation.' if operator else 'Profiles you have opened in this browser.' }}</p></div><a class="btn btn-primary" href="/onboard">Initialize a pilot</a></div>
+{% include "_profile_directory.html" %}
+{% if not operator %}<div class="reason-box">The complete pilot directory requires your private operator workspace link. It is printed when the local server starts. Other profiles are not revealed to anonymous visitors.</div>{% endif %}
+{% if not cards %}<p>No saved profiles in this browser yet. Open a personal link or initialize a pilot.</p>{% endif %}
+{% endblock %}

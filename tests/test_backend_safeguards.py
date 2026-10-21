@@ -139,6 +139,59 @@ def test_postgres_threshold_fallback_recovers_aborted_statement(monkeypatch):
 
 
 @pytest.mark.skipif(not os.getenv("TEST_DATABASE_URL"), reason="Requires explicitly configured disposable PostgreSQL")
+def test_concurrent_browser_starts_share_one_active_job():
+    from research_monitor.ui.jobs import enqueue_job
+    from research_monitor.database.models import BackgroundJob
+    engine = create_engine(os.environ["TEST_DATABASE_URL"])
+    init_db(engine)
+    uid="job_concurrency_"+uuid4().hex
+    with Session(engine) as db:
+        db.add(User(id=uid,name="Job concurrency",is_simulated=True))
+        db.commit()
+    def start(_):
+        with Session(engine) as db:
+            job,_=enqueue_job(db,uid,"monitor",{})
+            return job.id
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            ids=list(pool.map(start,range(2)))
+        assert ids[0] == ids[1]
+        with Session(engine) as db:
+            assert db.query(BackgroundJob).filter_by(user_id=uid).count()==1
+    finally:
+        with Session(engine) as db:
+            db.delete(db.get(User,uid))
+            db.commit()
+        engine.dispose()
+
+
+@pytest.mark.skipif(not os.getenv("TEST_DATABASE_URL"), reason="Requires explicitly configured disposable PostgreSQL")
+def test_heavy_browser_workers_use_one_processing_slot(monkeypatch):
+    import threading,time
+    from research_monitor.ui import jobs
+    engine=create_engine(os.environ["TEST_DATABASE_URL"])
+    monkeypatch.setattr(jobs,"engine",engine)
+    active=0
+    maximum=0
+    mutex=threading.Lock()
+    def work(_):
+        nonlocal active,maximum
+        with jobs.processing_slot():
+            with mutex:
+                active+=1
+                maximum=max(maximum,active)
+            time.sleep(.05)
+            with mutex:
+                active-=1
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            list(pool.map(work,range(2)))
+        assert maximum==1
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.skipif(not os.getenv("TEST_DATABASE_URL"), reason="Requires explicitly configured disposable PostgreSQL")
 def test_onboarding_releases_web_transaction_before_independent_worker(monkeypatch):
     from fastapi.testclient import TestClient
     from types import SimpleNamespace

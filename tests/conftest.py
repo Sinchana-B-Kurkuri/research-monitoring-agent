@@ -17,6 +17,7 @@ os.environ["DATABASE_URL"] = os.environ.get(
 
 @pytest.fixture(autouse=True)
 def isolated_experiment_outputs(tmp_path, monkeypatch):
+    monkeypatch.setenv("WORKSPACE_KEY_PATH", str(tmp_path / "workspace.key"))
     from research_monitor.config import config
     from research_monitor.evaluation import experiments
     from scripts import generate_figures
