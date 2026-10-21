@@ -70,7 +70,8 @@ h3 { font-size: 1rem; line-height: 1.45; font-weight: 650; }
 .badges { flex-shrink: 0; }
 .badge { display: inline-flex; align-items: center; padding: .18rem .6rem; border: 1px solid var(--border); border-radius: 999px; font-size: .72rem; font-weight: 650; line-height: 1.6; white-space: nowrap; }
 .badge-score, .badge-pending { color: var(--text-secondary); background: transparent; }
-.badge-score { font-size: .92rem; font-weight: 700; padding: .25rem .75rem; color: var(--text-primary); background: var(--bg); }
+.badge-score, .badges .badge { font-size: .92rem; font-weight: 700; padding: .25rem .75rem; }
+.badge-score { color: var(--text-primary); background: var(--bg); }
 .badge-auto, .badge-summary { color: var(--text-primary); background: var(--surface-secondary); border-color: var(--primary); }
 .badge-review { color: var(--primary-text); background: var(--header); border-color: var(--header); }
 .badge-low { color: var(--text-secondary); background: transparent; border-style: dashed; border-color: var(--border); }
@@ -148,7 +149,7 @@ progress::-moz-progress-bar { background: var(--primary); }
 .profile-directory { margin-bottom: 1.5rem; }
 .onboarding-layout { display: grid; grid-template-columns: minmax(0,1.3fr) minmax(0,1fr); gap: 2rem; align-items: start; }
 .onboarding-layout .profile-grid { grid-template-columns: 1fr; }
-.form-panel { max-width: 720px; }
+.form-panel { max-width: 720px; margin-inline: auto; }
 .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin: 1.5rem 0 .5rem; }
 .preference-examples { border-top: 1px dashed var(--border); padding-top: .75rem; margin-top: .75rem; }
 footer { border-top: 1px solid var(--border); text-align: center; padding: 1.25rem; font-size: .76rem; color: var(--text-secondary); }
