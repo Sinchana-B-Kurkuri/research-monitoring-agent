@@ -7,6 +7,9 @@
 # Local document build outputs; selected deliverables belong in docs/reports/.
 /output/
 /tmp/
+/ai/
+*.tmp
+*.swp
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

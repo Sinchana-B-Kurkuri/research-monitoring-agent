@@ -88,11 +88,6 @@ async def protect_personal_links(request, call_next):
     if request.method not in {"GET", "HEAD", "OPTIONS"}:
         origin = request.headers.get("origin")
         expected_origin = str(request.base_url).rstrip("/")
-        public_origin = config.PUBLIC_ORIGIN
-        # A TLS terminator can leave ASGI's scheme as HTTP. Restore HTTPS only
-        # for the configured public authority, never from client-supplied headers.
-        if public_origin.startswith("https://") and expected_origin == public_origin.replace("https://", "http://", 1):
-            expected_origin = public_origin
         if request.headers.get("sec-fetch-site") == "cross-site" or (origin and origin != expected_origin):
             return JSONResponse({"detail": "Cross-site actions are not allowed."}, status_code=403)
     response = await call_next(request)
@@ -121,13 +116,13 @@ def get_db() -> Generator[Session, None, None]:
 
 
 # =========================================================================
-# Production Health Check & Root Portal
+# Database Health Check & Root Portal
 # =========================================================================
 
 @app.get("/health")
 def health_check(session: Session = Depends(get_db)):
     """
-    Production health check endpoint verifying application and database connectivity.
+    Check application and database connectivity for local diagnostics.
     Returns 200 OK with connectivity telemetry; 503 SERVICE UNAVAILABLE on failure.
     """
     try:

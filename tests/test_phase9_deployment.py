@@ -1,7 +1,7 @@
 """
 test_phase9_deployment.py
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
-Unit and integration tests for Phase 9 — Cold-Start Deployment & Pilot Launch:
+Unit and integration tests for Phase 9 — Cold-Start Onboarding & Pilot Launch:
   1. Health check endpoint (/health) under normal and degraded conditions.
   2. Root portal navigation (/) with and without access tokens.
   3. Web process lightweight startup (no PyTorch / sentence_transformers loaded).
@@ -19,7 +19,6 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from research_monitor.config import config
 from research_monitor.database.models import (
     Base,
     Cycle,
@@ -205,20 +204,16 @@ def test_onboard_post_missing_fields_validation(client):
 
 
 @pytest.mark.parametrize(
-    ("internal_url", "origin", "public_origin", "form_submission"),
+    ("origin", "form_submission"),
     [
-        pytest.param("http://testserver", "http://testserver", "", False, id="local-json"),
-        pytest.param("http://testserver", "http://testserver", "", True, id="local-browser-form"),
-        pytest.param("https://pilot.example", "https://pilot.example", "", True, id="https-browser-form"),
-        pytest.param(
-            "http://pilot.example", "https://pilot.example", "https://pilot.example", True,
-            id="tls-terminating-proxy-form",
-        ),
+        pytest.param("http://testserver", False, id="local-json"),
+        pytest.param("http://testserver", True, id="local-browser-form"),
+        pytest.param("https://pilot.example", True, id="https-browser-form"),
+        pytest.param("http://127.0.0.1:8000", True, id="loopback-browser-form"),
     ],
 )
-def test_onboard_post_success(client, db_session, monkeypatch, internal_url, origin, public_origin, form_submission):
-    """Same-origin onboarding succeeds even if the trusted public HTTPS URL arrives over HTTP."""
-    monkeypatch.setattr(config, "PUBLIC_ORIGIN", public_origin)
+def test_onboard_post_success(client, db_session, origin, form_submission):
+    """Same-origin onboarding succeeds for both browser forms and JSON."""
     with patch("subprocess.run") as mock_run:
         # Simulate successful create_user.py subprocess run
         def side_effect(cmd, **kwargs):
@@ -245,7 +240,7 @@ def test_onboard_post_success(client, db_session, monkeypatch, internal_url, ori
             "seed_text": "Causal inference and agentic planning systems.",
         }
         headers = {"Origin": origin, "Sec-Fetch-Site": "same-origin"}
-        url = f"{internal_url}/onboard"
+        url = f"{origin}/onboard"
         if form_submission:
             response = client.post(url, data=fields, headers=headers)
         else:
@@ -267,28 +262,30 @@ def test_onboard_post_success(client, db_session, monkeypatch, internal_url, ori
 
 
 @pytest.mark.parametrize(
-    ("internal_url", "origin", "fetch_site", "public_origin"),
+    ("request_url", "origin", "fetch_site", "forwarded_headers"),
     [
-        pytest.param("http://pilot.example", "https://other.example", "same-site", "https://pilot.example", id="foreign-origin"),
-        pytest.param("https://pilot.example", "null", "same-origin", "https://pilot.example", id="opaque-origin"),
-        pytest.param("http://pilot.example", "https://pilot.example", "cross-site", "https://pilot.example", id="cross-site-metadata"),
-        pytest.param("http://other.example", "https://pilot.example", "same-origin", "https://pilot.example", id="wrong-host"),
-        pytest.param("http://pilot.example:8080", "https://pilot.example", "same-origin", "https://pilot.example", id="wrong-port"),
-        pytest.param("http://pilot.example", "http://pilot.example", "same-origin", "https://pilot.example", id="wrong-scheme"),
-        pytest.param("http://pilot.example", "https://pilot.example", "same-origin", "", id="untrusted-forwarding-headers"),
+        pytest.param("http://pilot.example", "http://other.example", "same-site", {}, id="foreign-origin"),
+        pytest.param("https://pilot.example", "null", "same-origin", {}, id="opaque-origin"),
+        pytest.param("http://pilot.example", "http://pilot.example", "cross-site", {}, id="cross-site-metadata"),
+        pytest.param("http://other.example", "http://pilot.example", "same-origin", {}, id="wrong-host"),
+        pytest.param("http://127.0.0.1:8000", "http://127.0.0.1:8001", "same-origin", {}, id="wrong-port"),
+        pytest.param("https://pilot.example", "http://pilot.example", "same-origin", {}, id="wrong-scheme"),
+        pytest.param(
+            "http://pilot.example", "https://pilot.example", "same-origin",
+            {"X-Forwarded-Proto": "https", "X-Forwarded-Host": "pilot.example"},
+            id="untrusted-forwarding-headers",
+        ),
     ],
 )
-def test_onboard_post_rejects_cross_site_before_worker(client, monkeypatch, internal_url, origin, fetch_site, public_origin):
-    monkeypatch.setattr(config, "PUBLIC_ORIGIN", public_origin)
+def test_onboard_post_rejects_cross_site_before_worker(client, request_url, origin, fetch_site, forwarded_headers):
     with patch("subprocess.run") as worker:
         response = client.post(
-            f"{internal_url}/onboard",
+            f"{request_url}/onboard",
             data={"user_id": "blocked_pilot", "name": "Blocked Pilot", "seed_text": "Robotics"},
             headers={
                 "Origin": origin,
                 "Sec-Fetch-Site": fetch_site,
-                "X-Forwarded-Proto": "https",
-                "X-Forwarded-Host": "pilot.example",
+                **forwarded_headers,
             },
         )
     assert response.status_code == 403

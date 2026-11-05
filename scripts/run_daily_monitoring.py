@@ -1,7 +1,7 @@
 """
 run_daily_monitoring.py
 ~~~~~~~~~~~~~~~~~~~~~~~
-Phase 9 Production Daily Monitoring Runner & Scheduler.
+Daily monitoring runner and scheduler.
 
 Executes autonomous daily arXiv monitoring cycles with:
   - Configurable conservative limits (max 50 papers ingested, 15 review tasks, 20 digest items).
@@ -321,7 +321,7 @@ def run_monitoring_round(args) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Phase 9 Production Daily Monitoring Runner & Scheduler."
+        description="Daily monitoring runner and scheduler."
     )
     parser.add_argument(
         "--user-id",

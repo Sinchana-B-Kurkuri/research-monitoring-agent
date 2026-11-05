@@ -1,58 +1,128 @@
 # Research Monitoring Agent
 
-Research monitoring with arXiv ingestion, normalized 384-dimensional embeddings, HIGH/BORDERLINE/LOW routing, human review, personalized digests, and feedback-driven preference learning.
+The research framework tracks arXiv papers against a pilot's interests. It routes high-relevance papers to a personalized digest, sends borderline papers to human review, and records low-relevance decisions in an audit trail. Gemini summarizes eligible papers. Review and digest feedback inform future relevance decisions.
 
-The existing architecture is retained: a Python state machine, FastAPI/Jinja2/HTMX, PostgreSQL/pgvector, Rocchio updates, and guarded logistic regression.
+**Start here:** [Run the dashboard locally](#local-setup) · [Use the dashboard](#dashboard-workflow) · [Run the tests](#tests) · [Read the reports](#reports)
 
-**Start with [the dashboard workflow guide](docs/DASHBOARD_WORKFLOW.md).** It explains the private pilot directory, saved links, browser monitoring buttons, history, preference imports, and available-data evaluation. [Backend repairs](docs/BACKEND_REPAIRS.md) contains diagnostics and terminal verification commands. [The earlier codebase analysis](docs/CODEBASE_ANALYSIS.md) records the pre-repair findings.
+## Architecture
 
-See the [repository audit and map](docs/REPOSITORY_AUDIT.md), [Render deployment guide](docs/RENDER_DEPLOYMENT.md), and [abstract, initial report, and final report](docs/reports/README.md).
+| Area | Role |
+| --- | --- |
+| Ingestion and embeddings | The arXiv client fetches papers, and Sentence Transformers creates 384-dimensional embeddings with `all-MiniLM-L6-v2` by default. |
+| Relevance and preference learning | A Python state machine scores each paper against the active interest profile. Percentile thresholds derived from the reference sample separate HIGH, BORDERLINE, and LOW. Rocchio updates the profile from feedback, and logistic regression is promoted only after validation. |
+| Review and delivery | FastAPI serves Jinja2 templates and local HTMX assets. The dashboard starts monitoring and evaluation jobs and shows review, digest, audit, and history. |
+| Persistence and summaries | SQLAlchemy, PostgreSQL, and pgvector store papers, embeddings, decisions, feedback, and model versions. The Google Gen AI SDK generates summaries for eligible papers and the database caches them. |
 
-## Quick start
+## Local setup
+
+Use Python 3.11 or newer, Docker with the Compose plugin, and a terminal in the repository root. The examples use PowerShell. On macOS or Linux, use `./venv/bin/python` and your shell's equivalents for environment variables and file copies.
 
 ```powershell
-Set-Location 'C:\Users\sinch\Desktop\AI Project\research-monitoring-agent'
 if (-not (Test-Path .\venv\Scripts\python.exe)) { python -m venv venv }
-.\venv\Scripts\python.exe -m pip install -r requirements.txt
-.\venv\Scripts\python.exe -m pip install -e . --no-deps
+.\venv\Scripts\python.exe -m pip install -e .
 if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+```
+
+Edit your local `.env` using [.env.example](.env.example) as a reference. The defaults match the local Compose database. Set `DATABASE_URL` only if your local connection differs.
+
+| Variable | Local use |
+| --- | --- |
+| `DATABASE_URL` | Default is `postgresql+psycopg2://postgres:postgres@localhost:5432/research_monitor`, using the example Compose credentials. |
+| `GEMINI_API_KEY` | Optional for local use. Add your key for generated summaries. With an empty key, the digest displays original abstracts and pending summaries. Restart the app after changing the key. |
+| `TEST_DATABASE_URL` | Set this in the test terminal before running pytest. Use a separate disposable PostgreSQL database. |
+
+The embedding model needs a local cache or network access for its initial download. Live ingestion needs arXiv access. Use corpus replay for a demonstration based on saved papers.
+
+### Start PostgreSQL and load reference data
+
+```powershell
 docker compose up -d db
-.\venv\Scripts\python.exe -c "from research_monitor.database.session import init_db; init_db()"
+docker compose exec -T db pg_isready -U postgres -d research_monitor
+```
+
+Once PostgreSQL reports that it is accepting connections, reuse the existing pair `data/corpus.parquet` and `data/embeddings.npy`. If you do not have that pair, restore it from your research artifacts or generate a fresh pair with `scripts/run_phase2.py --max-results 10000` using the virtual environment. Generation writes those paths, so back up any existing corpus or embeddings first. The default corpus target leaves a separate evaluation frame alongside the 5,000 reference papers.
+
+```powershell
 .\venv\Scripts\python.exe scripts/run_phase3_loader.py
-.\venv\Scripts\python.exe scripts/create_user.py --user-id researcher --name 'Researcher' --seed-text 'Autonomous AI agents, language model reasoning, reinforcement learning, and tool use.'
+docker compose exec -T db psql -U postgres -d research_monitor -c "SELECT count(*) FROM papers WHERE is_reference AND embedding IS NOT NULL;"
+```
+
+The loader initializes the schema and inserts missing paper IDs while preserving existing papers and pilot records. The reference count should be at least 5,000 with default settings. To initialize the schema separately, run `python -c "from research_monitor.database.session import init_db; init_db()"` in the virtual environment.
+
+### Start FastAPI and initialize a pilot
+
+```powershell
 .\venv\Scripts\python.exe scripts/run_ui.py --host 127.0.0.1 --port 8000
 ```
 
-Set DATABASE_URL in .env before initialization. The default Compose URL is postgresql+psycopg2://postgres:postgres@localhost:5432/research_monitor. The loader requires the existing data/corpus.parquet and data/embeddings.npy; the guide explains how to generate missing artifacts. It inserts missing papers without deleting existing records.
+From another terminal, `Invoke-RestMethod http://127.0.0.1:8000/health` checks the app and database connection. Keep the server terminal open while using the dashboard.
 
-Save the personal review/digest/audit links printed by create_user.py. Missing tokens return 401, foreign resources return 403, and anonymous registration using an existing user ID returns 409. Access logs redact bearer tokens.
+### Dashboard workflow
 
-The local web launcher also prints a private operator workspace link. Open it once to recover all local profiles and their personal links in your browser. Each profile's Dashboard starts monitoring with a button, retains background progress, and links to paginated session/feedback history. **Back to pilots** returns to the workspace; the initialization page contains the form and optional preference-source selector. Preference inheritance copies effective feedback only from a source profile you explicitly choose.
+1. Open the private workspace link printed in the terminal to see saved pilots. You can also open [Initialize a pilot](http://127.0.0.1:8000/onboard) directly.
+2. Create a pilot with a short description of its research interests. The optional preference-memory selector copies effective feedback from a profile you can already access.
+3. Open **Dashboard & settings**, choose arXiv categories, the lookback window, and a paper limit, then click **Start monitoring session**. Refreshing the page preserves job history.
+4. Use **Review** to handle borderline papers and **Digest** to read delivered papers and provide feedback. **Audit** shows discarded papers, and **History** shows earlier cycles and feedback. **Back to pilots** returns to the workspace and its saved links.
+5. Use **Evaluation** to run the available-data report. The report records label coverage and distinguishes partial results from the complete frozen evaluation.
 
-## Monitoring and summaries
+For a terminal-based demonstration, replace `researcher` with an existing pilot ID:
 
 ```powershell
 .\venv\Scripts\python.exe scripts/run_daily_monitoring.py --user-id researcher --once
-# Historical replay:
 .\venv\Scripts\python.exe scripts/run_cycle.py --user-id researcher --mode replay --as-of-date 2024-12-31 --limit 50
 ```
 
-Live daily runs build digests automatically. After replay, open the review link and use its digest update button. Later acceptances enter an existing digest within its remaining capacity. Failed summaries remain retryable, and skipped reviews remain actionable. Defaults are 15 review tasks and 20 digest items per cycle.
+After a historical replay, open the review page and use its digest update button. The daily runner also supports `--daemon --interval-hours 24` for local scheduling.
 
-Set GEMINI_API_KEY for actual summaries. Without a key, the digest shows original abstracts with summaries pending; mock summaries require explicit selection. Defaults are gemini-3.5-flash-lite, temperature 0.0, and prompt v1.0. The cache uses relational user/paper/model/prompt identity.
+## Tests
 
-CALIBRATION_PATH defaults to data/calibrated_thresholds.json. Valid development calibration levels apply unless CALIBRATED_P_HIGH/CALIBRATED_P_LOW override them. Otherwise provisional P98/P90 levels apply. Adaptation uses effective labels from the SQL view and runs in the worker.
+Use a disposable PostgreSQL/pgvector container so integration tests stay separate from pilot data. If port 55433 is occupied, choose another port in both the container command and the URL.
 
-## Verification and data limits
+```powershell
+docker run -d --rm --name research-monitor-local-tests -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=research_monitor_test -p 127.0.0.1:55433:5432 pgvector/pgvector:pg16
+docker exec research-monitor-local-tests pg_isready -U postgres -d research_monitor_test
+```
 
-The repaired suite passed **265 tests with no skips** against disposable PostgreSQL. Set TEST_DATABASE_URL explicitly to run PostgreSQL tests; tests never use the application's .env database URL or its live Gemini credential. Generated test outputs go into temporary directories. See the guide for commands.
+Wait for PostgreSQL to accept connections, then run:
 
-The local sample currently contains **171 human labels out of 500 papers**. The Evaluation screen and default Phase 13 CLI produce available-data reports with explicit labeled-subset coverage. Add `--strict` to require the complete frozen sample for final research claims. Missing labels never become artificial negatives or disable application use. Phase 13 exits 2 when strict E1 is blocked, 1 on an evaluation error, and 0 when the requested analysis ran. Always inspect numbers_frozen to determine final evidence completion.
+```powershell
+$env:TEST_DATABASE_URL = 'postgresql+psycopg2://postgres:postgres@127.0.0.1:55433/research_monitor_test'
+.\venv\Scripts\python.exe -m pytest -q
+Remove-Item Env:TEST_DATABASE_URL
+docker stop research-monitor-local-tests
+```
 
-Explicit heuristic simulations use --simulated-oracle and record a run manifest. E5 is a theoretical token/cost calculation; E6 is ideal oracle review. Neither is measured human pilot evidence. Offline classifier ablations deliberately differ from the live promotion guard. Use a separate --results-dir for new analysis.
+PostgreSQL integration tests skip without `TEST_DATABASE_URL`. The test fixtures isolate generated outputs and use no live Gemini credential.
 
-Historical paper drafts and result tables have not been regenerated and must not be treated as updated evidence.
+## Research evaluation
 
-## Scheduling and deployment
+Use the saved corpus, embeddings, evaluation sample, and human labels for research runs. If the evaluation sample is missing, run `scripts/prepare_evaluation_sample.py` in the virtual environment before labeling. Check label coverage with `scripts/label_papers.py --status`. Use `scripts/run_phase4_evaluation.py` to run baselines and calibrate thresholds on development labels. The default local calibration path is `data/calibrated_thresholds.json`.
 
-The daily runner supports `--user-id all --once` or `--daemon --interval-hours 24` and can run under Task Scheduler/cron. Compose starts PostgreSQL only; this repository does not provision a hosted scheduler. See [Render deployment](docs/RENDER_DEPLOYMENT.md) for publishing `main` and checking the existing hosted service.
+```powershell
+# Evaluate the available human labels and export pilot activity.
+.\venv\Scripts\python.exe scripts/run_phase13_evaluation.py --results-dir data/local_evaluation/results --export-dir data/local_evaluation/export
+
+# Run offline experiments, allowing a simulated oracle when labels are missing.
+.\venv\Scripts\python.exe scripts/run_phase12_experiments.py --all --simulated-oracle --results-dir data/local_simulations
+```
+
+Add `--strict` to Phase 13 for the complete frozen-sample requirements. Check the report's label coverage and `numbers_frozen` before citing results. Simulations are separate from human pilot evidence. Use separate output directories for new runs to preserve the committed tables and figures.
+
+## Repository layout
+
+| Path | Contents |
+| --- | --- |
+| `src/research_monitor/` | FastAPI, templates and assets, database, ingestion, relevance, review, summary, and evaluation modules |
+| `scripts/` | Local startup, corpus preparation, monitoring, and evaluation commands |
+| `tests/` | Unit and integration tests |
+| `data/` | Local corpus, embeddings, labels, and runtime outputs. Git tracks only the directory placeholder. |
+| `experiments/results/` | Committed research tables and figures |
+| `docs/` | Abstract, initial report, final ACM paper, and editable source archive |
+
+## Reports
+
+1. [Abstract](docs/01-abstract.docx)
+2. [Initial report](docs/02-initial-report.pdf)
+3. [Final ACM research report](docs/03-final-report.pdf)
+
+The [final LaTeX archive](docs/03-final-report-latex.zip) contains the editable paper, bibliography, figures, and build instructions.

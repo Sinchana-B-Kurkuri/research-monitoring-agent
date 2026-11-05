@@ -8,7 +8,7 @@ from research_monitor.database.models import Base, create_training_labels_view
 
 logger = logging.getLogger(__name__)
 
-# Resilient database engine configuration for hosted PostgreSQL & local environments
+# Check pooled PostgreSQL connections before reuse.
 engine = create_engine(
     DATABASE_URL,
     pool_pre_ping=True,
