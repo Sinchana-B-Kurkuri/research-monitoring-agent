@@ -1,0 +1,80 @@
+\documentclass[sigconf,nonacm]{acmart}
+
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{tikz}
+\usetikzlibrary{shapes.geometric,arrows.meta,positioning,calc}
+\usepackage{subcaption}
+\usepackage{url}
+\usepackage{microtype}
+\usepackage{hyperref}
+
+%% Metadata Information
+\title[Relevance-Gated Agentic Workflow for Autonomous Research Monitoring]{Relevance-Gated Agentic Workflow for Autonomous Research Monitoring: An Empirical Study in Human-in-the-Loop Literature Triage and Preference Adaptation}
+
+\author{Sinchana B. Kurkuri}
+\affiliation{%
+  \institution{Department of Computer Science and Engineering}
+  \country{India}
+}
+\email{sinchana.kurkuri@academic.edu}
+
+\begin{document}
+
+\begin{abstract}
+The exponential expansion of pre-print publication venues---most notably arXiv---has overwhelmed researchers' capacity to maintain awareness of relevant scientific advances. Conventional notification mechanisms, such as keyword alert feeds and unweighted keyword searches, either suffer from severe false-positive saturation or omit semantically relevant contributions. Conversely, unconstrained Large Language Model (LLM) agent frameworks that ingest, parse, and summarize all published literature incur prohibitive monetary expenses, latency, and hallucination risks. In this paper, we propose and evaluate a \textbf{Relevance-Gated Agentic Workflow for Autonomous Research Monitoring}, an autonomous system that continuously triages, filters, summarizes, and adapts to user preferences over scientific publication streams. The system is formulated as an explicit, auditable Python state machine rather than an unconstrained multi-agent swarm. Candidate publications are embedded via dense sentence transformers (\texttt{all-MiniLM-L6-v2}, 384-d) and evaluated against a user interest profile using a \textbf{three-way percentile-calibrated relevance gate}: high-confidence papers are automatically delivered and summarized; low-confidence papers are immediately discarded without invoking expensive language models; and borderline candidates are escalated to an asynchronous, capped human review queue. The system dynamically personalizes its routing logic through two-stage preference memory: unsupervised Rocchio centroid updates for cold-start adaptation, followed by an $L_2$-regularized logistic regression classifier promoted under strict out-of-fold generalization guards. Evaluating on an arXiv corpus across computer science domains (\texttt{cs.CL}, \texttt{cs.LG}, \texttt{cs.AI}) with a 500-paper stratified ground-truth sampling frame and frozen test split, our relevance gate achieves 0.600 precision and 0.978 ROC-AUC on high-confidence deliveries while discarding zero relevant papers (0.0\% low-miss rate). Compared against an unmitigated summarize-everything baseline, our relevance gating achieves a 98.0\% reduction in LLM inference calls and computational expenditures. Furthermore, signal ablation experiments demonstrate that human review decisions on borderline papers provide vital information density that accelerates preference learning beyond user interaction signals alone. We conclude with a candid report on production deployment realities, operational trade-offs, and empirical boundary conditions.
+\end{abstract}
+
+%% CCS Concepts
+\begin{CCSXML}
+<ccs2012>
+   <concept>
+       <concept_id>10002951.10003317.10003347.10003350</concept_id>
+       <concept_desc>Information systems~Recommender systems</concept_desc>
+       <concept_significance>500</concept_significance>
+       </concept>
+   <concept>
+       <concept_id>10002951.10003317.10003338.10003341</concept_id>
+       <concept_desc>Information systems~Language models</concept_desc>
+       <concept_significance>400</concept_significance>
+       </concept>
+   <concept>
+       <concept_id>10010147.10010257.10010282.10010292</concept_id>
+       <concept_desc>Computing methodologies~Learning from implicit feedback</concept_desc>
+       <concept_significance>500</concept_significance>
+       </concept>
+   <concept>
+       <concept_id>10010147.10010178.10010179</concept_id>
+       <concept_desc>Computing methodologies~Natural language processing</concept_desc>
+       <concept_significance>300</concept_significance>
+       </concept>
+ </ccs2012>
+\end{CCSXML}
+
+\ccsdesc[500]{Information systems~Recommender systems}
+\ccsdesc[400]{Information systems~Language models}
+\ccsdesc[500]{Computing methodologies~Learning from implicit feedback}
+\ccsdesc[300]{Computing methodologies~Natural language processing}
+
+\keywords{Research Monitoring, Relevance Gating, Human-in-the-Loop, Dense Retrieval, Active Learning, Preference Adaptation, Large Language Models}
+
+\maketitle
+
+\input{sections/01_introduction}
+\input{sections/02_related_work}
+\input{sections/03_architecture}
+\input{sections/04_methodology}
+\input{sections/05_experiments}
+\input{sections/06_results}
+\input{sections/07_discussion}
+\input{sections/08_conclusion}
+\input{sections/09_acknowledgments}
+
+\bibliographystyle{ACM-Reference-Format}
+\bibliography{references}
+
+\appendix
+\input{sections/10_appendices}
+
+\end{document}

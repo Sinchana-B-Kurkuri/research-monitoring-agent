@@ -1,0 +1,75 @@
+\section{Dataset and Experimental Methodology}
+\label{sec:dataset}
+
+\subsection{arXiv Corpus and Isolated Reference Sample}
+\label{sec:corpus}
+
+Our evaluation corpus was constructed by harvesting metadata from arXiv across three central AI categories: Computation and Language (\texttt{cs.CL}), Machine Learning (\texttt{cs.LG}), and Artificial Intelligence (\texttt{cs.AI}) deposited between January 1, 2020, and December 31, 2024. All records were normalized, whitespace-cleaned, and deduplicated using version-stripped arXiv identifiers.
+
+The corpus was partitioned into two isolated 5,000-paper subsets:
+\begin{enumerate}
+    \item \textbf{Reference Sample ($\mathcal{S}_{\text{ref}}$, $N = 5,000$):} Sampled randomly using fixed seed 42. Reserved exclusively for computing percentile distributions and calibrating thresholds. Papers in this sample are never presented for human annotation.
+    \item \textbf{Evaluation Sampling Frame ($N = 5,000$):} Reserved for ground-truth labeling, baseline comparisons, and offline simulation experiments.
+\end{enumerate}
+
+\subsection{Stratified Sampling Frame and Weights}
+\label{sec:stratification}
+
+Because relevant publications constitute a small fraction ($< 5\%$) of all submitted manuscripts, uniform random sampling would yield very few positive examples in a modest labeling budget. To construct an informative evaluation set, we stratified the 5,000-paper evaluation frame into five strata based on reference percentiles under the seed interest vector $\mathbf{v}_0$:
+\begin{itemize}
+    \item \textbf{Stratum S1 ($\ge P98$):} Population $N_1 = 100$. Target region: HIGH.
+    \item \textbf{Stratum S2 ($P90 - P98$):} Population $N_2 = 400$. Target region: BORDERLINE.
+    \item \textbf{Stratum S3 ($P75 - P90$):} Population $N_3 = 750$. Target region: LOW.
+    \item \textbf{Stratum S4 ($P50 - P75$):} Population $N_4 = 1,250$. Target region: LOW.
+    \item \textbf{Stratum S5 ($< P50$):} Population $N_5 = 2,500$. Target region: LOW.
+\end{itemize}
+
+To correct for non-uniform sampling probabilities and provide unbiased estimates of true population performance, all reported metrics incorporate Horvitz-Thompson sampling weights~\cite{horvitz1952generalization}:
+\begin{equation}
+w_h = \frac{N_h}{n_h}
+\end{equation}
+where $N_h$ is the stratum population and $n_h$ is the number of labeled papers in stratum $h$. This weighting guarantees that the weighted sample reproduces the exact finite-population totals: $\sum_{h=1}^5 n_h w_h = 5,000$.
+
+\subsection{Ground-Truth Labeling and Frozen Test Split}
+\label{sec:ground_truth}
+
+A total of \textbf{171 publications} were manually labeled by domain experts using a three-point taxonomy:
+\begin{itemize}
+    \item \texttt{relevant} ($y=1$): Directly addresses the researcher's stated research core.
+    \item \texttt{somewhat} ($y=0$ in primary, $y=1$ in lenient): Shares peripheral topical overlap or related methodology.
+    \item \texttt{not\_relevant} ($y=0$): Completely outside the researcher's scope.
+\end{itemize}
+
+The labeled dataset was partitioned into a \textbf{70\% Development Split} (121 papers) and a \textbf{30\% Test Split} (50 papers) stratified across S1--S5 using fixed random seed 42. The test split was permanently frozen prior to experiment execution. Every test set evaluation was audited through an immutable log file (\texttt{test\_access.log}).
+
+The label distribution across splits satisfies all predefined roadmap quotas:
+\begin{itemize}
+    \item Total labeled papers: 171
+    \item Total relevant labels: $103 \ge 100$ (Target Met)
+    \item Test split relevant labels: $33 \ge 30$ (Target Met)
+\end{itemize}
+
+\subsection{Baseline Models and Ablation Conditions}
+\label{sec:baselines}
+
+We benchmark the proposed three-way relevance gate against five baseline approaches:
+\begin{itemize}
+    \item \textbf{B0 (Random Selection):} Uniform random selection of publications at matched volume (lower performance bound).
+    \item \textbf{B1 (TF-IDF Cosine Similarity):} Classical lexical baseline computing cosine similarity between sublinear TF-IDF vectors of candidate abstracts and the seed interest text.
+    \item \textbf{B2 (Fixed Seed Embedding Cosine):} Dense embedding retrieval using the cold-start seed vector $\mathbf{v}_0$ without three-way gating or adaptation.
+    \item \textbf{B3 (Updated Centroid Cosine):} Dense retrieval using the Rocchio-adapted interest vector $\mathbf{c}_t$.
+    \item \textbf{B4 (TF-IDF + Logistic Regression):} Re-implementation of the classical arXiv-Sanity preference model~\cite{karpathy2015arxivsanity}, training an $L_2$-regularized logistic regression classifier over TF-IDF features.
+    \item \textbf{B5 (Embedding Logistic Regression):} Supervised logistic regression classifier trained on 384-d dense embeddings under varying feedback conditions.
+\end{itemize}
+
+\subsection{Offline Simulation Protocols}
+\label{sec:sim_protocols}
+
+Because live user pilots yield small sample sizes within practical project timelines, offline learning curves are evaluated using the labeled development pool as a simulated feedback oracle:
+\begin{itemize}
+    \item \textbf{Oracle Rule:} A simulated user likes a delivered paper ($y=1$) if its ground-truth label is \texttt{relevant}; otherwise dislikes ($y=0$). A simulated reviewer accepts a borderline paper under the same criterion.
+    \item \textbf{Protocol A (Random Feedback):} $n$ feedback instances are sampled uniformly at random from the development pool.
+    \item \textbf{Protocol B (Gate-Selected Feedback):} Simulates genuine operational feedback collection: user reactions are sampled strictly from development papers routed to HIGH, while reviewer decisions are sampled strictly from papers routed to BORDERLINE.
+\end{itemize}
+
+All simulation experiments are executed across 10 independent random seeds, reporting mean trajectories and standard deviations.

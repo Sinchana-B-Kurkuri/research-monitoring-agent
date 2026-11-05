@@ -1,0 +1,22 @@
+\section{Related Work}
+\label{sec:related_work}
+
+\subsection{Scientific Literature Filtering and arXiv Alerting}
+\label{sec:rel_filtering}
+
+Automated literature monitoring has evolved from manual bibliographic queries to automated alerting~\cite{tiropanis2020web,wang2020microsoft}. The seminal work of Karpathy in developing \textit{arXiv-Sanity Preserver}~\cite{karpathy2015arxivsanity} demonstrated the utility of TF-IDF vectors combined with support vector machines (SVM) trained on user library bookmarks. While effective as an exploratory interface, arXiv-Sanity relies on static user-triggered searches and batch retraining. Commercial engines such as Google Scholar Alerts and Semantic Scholar provide periodic email digests based on citation graphs and keyword co-occurrence; however, their ranking algorithms operate as black boxes, provide no mechanism for active borderline triage, and cannot generate personalized, interest-framed syntheses.
+
+\subsection{Dense Embedding Representations and Semantic Search}
+\label{sec:rel_embeddings}
+
+The advent of pre-trained transformer representations has revolutionized document retrieval~\cite{vaswani2017attention,manning2008introduction}. Reimers and Gurevych introduced Sentence-BERT (SBERT)~\cite{reimers2019sentencebert}, demonstrating that fine-tuning siamese and triplet networks on natural language inference datasets produces dense sentence representations capable of semantic similarity search via cosine distance. Specialized scientific models, such as SciBERT~\cite{beltagy2019scibert} and SPECTER~\cite{cohan2020specter}, further fine-tuned transformers on scientific citations and co-citation graphs. In our architecture, we employ \texttt{all-MiniLM-L6-v2}, an efficient 384-dimensional model trained on over 1 billion sentence pairs. Due to its compact dimensionality and high semantic retrieval performance, it allows exact nearest-neighbor cosine scoring across tens of thousands of papers within memory, eliminating the operational overhead of approximate nearest neighbor (ANN) vector indices for moderate corpus scales.
+
+\subsection{Human-in-the-Loop Machine Learning and Active Learning}
+\label{sec:rel_hitl}
+
+Active learning explores how algorithms can query users to label informative data points, typically focusing on points near the decision boundary (uncertainty sampling)~\cite{settles2012active,lewis1994sequential,anderson2021active}. Settles provided a comprehensive survey of active learning strategies, noting that boundary-proximal instances provide maximal reduction in hypothesis version spaces. In information retrieval, Rocchio's classical relevance feedback algorithm~\cite{rocchio1971relevance} introduced a geometric formulation for updating vector space queries based on positive and negative documents. Recent work by Zhang et al.~\cite{zhang2024active} explored active preference learning for language models. Our work synthesizes these principles into an autonomous operational workflow: borderline papers ($t_{\text{low}} < s < t_{\text{high}}$) serve as natural active-learning candidates that are asynchronously presented to the researcher, simultaneously refining the literature delivery stream and expanding the supervised training dataset.
+
+\subsection{LLM Summarization and Agentic Architectures}
+\label{sec:rel_llm_agents}
+
+The emergence of generative LLMs has catalyzed interest in autonomous research agents. Frameworks like AutoGen~\cite{wu2023autogen} and CrewAI demonstrate multi-agent debates where specialized agents discover, critique, and summarize literature. However, recent empirical audits demonstrate that such unconstrained multi-agent frameworks suffer from non-deterministic looping, high token overhead, and compounding hallucinations. Our framework adheres to an \textit{agentic workflow} pattern without framework dependencies: the agentic autonomy emerges from deterministic routing decisions, automatic escalation to human review, and persistent preference adaptation over time, while constraining expensive LLM execution strictly to gate-cleared manuscripts.

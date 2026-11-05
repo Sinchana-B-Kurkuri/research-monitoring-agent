@@ -1,0 +1,54 @@
+\section{Core System Configuration Parameters}
+\label{sec:appendix_params}
+
+All operational parameters are defined centrally in \texttt{src/research\_monitor/config.py} and immutably recorded into database cycle snapshots (\texttt{cycles.config\_snapshot}). Table~\ref{tab:system_params} documents these configuration thresholds and operational defaults.
+
+\begin{table}[h]
+\centering
+\small
+\caption{Core System Configuration Parameters and Defaults.}
+\label{tab:system_params}
+\begin{tabular}{lcl}
+\toprule
+\textbf{Parameter Name} & \textbf{Value} & \textbf{Operational Description} \\
+\midrule
+\texttt{ARXIV\_CATEGORIES} & \texttt{cs.CL,cs.LG,cs.AI} & Target pre-print categories \\
+\texttt{CORPUS\_TARGET\_SIZE} & 10,000 & Bounded evaluation corpus scale \\
+\texttt{REFERENCE\_SAMPLE\_SIZE} & 5,000 & Reference sample size \\
+\texttt{EMBEDDING\_MODEL} & \texttt{all-MiniLM-L6-v2} & 384-d dense sentence transformer \\
+\texttt{PROVISIONAL\_P\_HIGH} & 98.0 & High relevance threshold ($t_{\text{high}}$) \\
+\texttt{PROVISIONAL\_P\_LOW} & 90.0 & Low relevance threshold ($t_{\text{low}}$) \\
+\texttt{ROCCHIO\_ALPHA} & 1.0 & Seed vector weight ($\alpha$) \\
+\texttt{ROCCHIO\_BETA} & 0.75 & Positive feedback weight ($\beta$) \\
+\texttt{ROCCHIO\_GAMMA} & 0.25 & Negative feedback weight ($\gamma$) \\
+\texttt{CLASSIFIER\_MIN\_SAMPLES} & 30 & Minimum labels for classifier \\
+\texttt{PROMOTION\_MARGIN} & 0.02 & Minimum OOF AUC gain over centroid \\
+\texttt{REVIEW\_QUEUE\_CAP} & 15 & Maximum borderline tasks per cycle \\
+\texttt{DIGEST\_CAP} & 20 & Maximum delivered papers per cycle \\
+\texttt{TASK\_EXPIRY\_DAYS} & 3 & Unreviewed task expiration window \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Gated Interest-Framed Summarization Prompt}
+\label{sec:appendix_prompt}
+
+The prompt utilized by \texttt{SummaryService} in \texttt{src/research\_monitor/summary/service.py} (Version \texttt{v1.0}):
+
+\begin{quote}
+\small
+\ttfamily
+You are an expert scientific research assistant. A researcher has specified the following research interest profile:\\
+"\{user\_interest\_seed\}"\\
+\\
+The following paper has passed the automated relevance gate:\\
+Title: \{paper\_title\}\\
+Abstract: \{paper\_abstract\}\\
+\\
+Generate a concise, 3-sentence interest-framed summary:\\
+Sentence 1: State the core problem and primary methodological technique proposed in the paper.\\
+Sentence 2: Highlight the principal empirical result, benchmark metric, or finding achieved by the authors.\\
+Sentence 3: Explicitly explain why this paper is relevant to the researcher's stated interests and how it connects to their work.\\
+\\
+Do not use conversational filler. Maintain rigorous scientific terminology.
+\end{quote}
