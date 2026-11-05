@@ -301,17 +301,40 @@ def test_onboard_post_rejects_cross_site_before_worker(client, monkeypatch, inte
 # =========================================================================
 
 def test_web_module_lightweight_imports():
-    """
-    Ensure research_monitor.ui.app does not import PyTorch or sentence_transformers.
-    The web service process must remain lightweight.
-    """
+    """Check what the web process actually loads, including transitive imports."""
     from pathlib import Path
-    app_file = Path(__file__).resolve().parent.parent / "src" / "research_monitor" / "ui" / "app.py"
-    source = app_file.read_text(encoding="utf-8")
-    assert "import torch" not in source
-    assert "from torch" not in source
-    assert "import sentence_transformers" not in source
-    assert "from sentence_transformers" not in source
+    import subprocess
+    import sys
+
+    src = Path(__file__).resolve().parents[1] / "src"
+    result = subprocess.run([sys.executable, "-c", f"""
+import sys
+sys.path.insert(0, {str(src)!r})
+from research_monitor.ui.app import app
+from research_monitor.relevance.classifier import find_nearest_feedback_papers
+assert find_nearest_feedback_papers(None, "unused", None) == (None, None)
+loaded = set(sys.modules) & {{"torch", "sentence_transformers", "sklearn", "scipy", "pandas"}}
+assert not loaded, loaded
+from research_monitor.relevance import train_and_evaluate_classifier, run_monitoring_cycle
+assert callable(train_and_evaluate_classifier) and callable(run_monitoring_cycle)
+"""], capture_output=True, text=True, check=False, timeout=45)
+    assert result.returncode == 0, result.stderr
+
+
+def test_onboard_reports_missing_reference_embeddings_without_worker_output(client, caplog):
+    import subprocess
+
+    failed = subprocess.CompletedProcess(
+        [], 1, stdout="private worker output", stderr="private worker error\nReferenceEmbeddingsUnavailable\n",
+    )
+    with patch("subprocess.run", return_value=failed):
+        response = client.post(
+            "/onboard", data={"user_id": "missing_ref", "name": "Pilot", "seed_text": "Robotics"},
+        )
+    assert response.status_code == 503
+    assert "until the reference paper embeddings are loaded" in response.text
+    assert "private worker" not in response.text
+    assert "private worker" not in caplog.text
 
 
 # =========================================================================

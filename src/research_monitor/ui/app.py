@@ -32,6 +32,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from research_monitor.config import config
+from research_monitor.ui.jobs import processing_slot
 from research_monitor.ui.workspace import active_token, accessible_profiles, is_operator, remember_profile
 
 from research_monitor.database.models import (
@@ -46,6 +47,7 @@ from research_monitor.database.models import (
 )
 from research_monitor.database.session import SessionLocal
 from research_monitor.relevance.state import DecisionStatus
+from research_monitor.relevance.thresholds import ReferenceEmbeddingsUnavailable
 from research_monitor.review.digest import (
     record_user_feedback,
     resume_after_review,
@@ -69,7 +71,7 @@ class AccessTokenLogFilter(logging.Filter):
 
 logging.getLogger("uvicorn.access").addFilter(AccessTokenLogFilter())
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("uvicorn.error").getChild(__name__)
 
 # Template and script paths
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
@@ -192,6 +194,15 @@ def onboard_page(request: Request, session: Session = Depends(get_db)):
     )
 
 
+def run_onboarding_worker(bind, command):
+    with processing_slot(bind, wait=False) as acquired:
+        if not acquired:
+            return None
+        return subprocess.run(
+            command, cwd=PROJECT_ROOT, capture_output=True, text=True, check=False, timeout=90,
+        )
+
+
 @app.post("/onboard")
 async def handle_onboard_user(
     request: Request,
@@ -275,14 +286,16 @@ async def handle_onboard_user(
 
     # The lookup above starts a transaction and holds a users-table read lock.
     # Release it before waiting for another process that writes to that database.
+    bind = session.get_bind()
     session.rollback()
 
     # Execute create_user.py in separate subprocess to preserve web process isolation.
     # Schema migrations belong to setup, not an interactive signup request.
-    logger.info("Spawning isolated onboarding subprocess for user_id='%s' (name='%s')", user_id, name)
+    logger.info("Starting isolated onboarding worker")
     start_time = time.perf_counter()
     try:
-        proc = await run_in_threadpool(subprocess.run,
+        proc = await run_in_threadpool(
+            run_onboarding_worker, bind,
             [
                 sys.executable,
                 str(CREATE_USER_SCRIPT),
@@ -293,50 +306,40 @@ async def handle_onboard_user(
                 *(["--inherit-from-user", inherit_from_user] if inherit_from_user else []),
                 *(["--require-new"] if existing_user is None else []),
             ],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=90,
-        )
-        elapsed = time.perf_counter() - start_time
-        logger.info(
-            "Onboarding subprocess for user_id='%s' completed in %.2fs (returncode=%d)",
-            user_id,
-            elapsed,
-            proc.returncode,
         )
     except subprocess.TimeoutExpired:
-        elapsed = time.perf_counter() - start_time
-        logger.error(
-            "Onboarding subprocess for user_id='%s' timed out after %.2fs",
-            user_id,
-            elapsed,
-        )
+        logger.error("Onboarding worker timed out after %.2fs", time.perf_counter() - start_time)
         error_msg = "User initialization timed out. Please try again."
-        if "application/json" in content_type or request.headers.get("accept", "") == "application/json":
-            raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail=error_msg)
-        return templates.TemplateResponse(
-            request=request,
-            name="onboard.html",
-            context={
-                "error": error_msg,
-                "form_user_id": user_id,
-                "form_name": name,
-                "form_seed_text": seed_text,
-                "active_tab": "onboard",
-                "token": None,
-                "user": None,
-            },
-        )
+        error_status = status.HTTP_504_GATEWAY_TIMEOUT
+    except OSError as exc:
+        logger.error("Unable to start onboarding worker (%s)", type(exc).__name__)
+        error_msg = "Unable to start user initialization. Check the server configuration."
+        error_status = status.HTTP_503_SERVICE_UNAVAILABLE
+    else:
+        error_msg = None
+        if proc is None:
+            logger.info("Onboarding worker deferred because another processing job is active")
+            error_msg = "A processing session is already running. Try again when it finishes."
+            error_status = status.HTTP_503_SERVICE_UNAVAILABLE
+        elif proc.returncode != 0:
+            logger.error("Onboarding worker exited with code %d after %.2fs",
+                         proc.returncode, time.perf_counter() - start_time)
+            error_msg = "User initialization failed. Check the server configuration or choose an unused user ID."
+            error_status = status.HTTP_500_INTERNAL_SERVER_ERROR
+            if proc.stderr.splitlines()[-1:] == [ReferenceEmbeddingsUnavailable.__name__]:
+                logger.error("Onboarding requires reference embeddings in the database or corpus files")
+                error_msg = "User initialization is unavailable until the reference paper embeddings are loaded."
+                error_status = status.HTTP_503_SERVICE_UNAVAILABLE
+        else:
+            logger.info("Onboarding worker completed in %.2fs", time.perf_counter() - start_time)
 
-    if proc.returncode != 0:
-        logger.error("User initialization subprocess failed (exit=%s)", proc.returncode)
-        error_msg = "User initialization failed. Check the server configuration or choose an unused user ID."
+    if error_msg:
         if "application/json" in content_type or request.headers.get("accept", "") == "application/json":
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=error_msg)
+            raise HTTPException(status_code=error_status, detail=error_msg)
         return templates.TemplateResponse(
             request=request,
             name="onboard.html",
+            status_code=error_status,
             context={
                 "error": error_msg,
                 "form_user_id": user_id,

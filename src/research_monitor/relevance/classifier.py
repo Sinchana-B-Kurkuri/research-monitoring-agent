@@ -29,9 +29,6 @@ import pickle
 from typing import Optional, Sequence
 
 import numpy as np
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import roc_auc_score
-from sklearn.model_selection import RepeatedStratifiedKFold, StratifiedKFold
 from sqlalchemy.orm import Session
 
 from research_monitor.database.models import (
@@ -267,6 +264,10 @@ def _select_best_C(
     Select hyperparameter C from candidates using inner 3-fold stratified cross-validation.
     Ensures zero data leakage from outer evaluation fold.
     """
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.metrics import roc_auc_score
+    from sklearn.model_selection import StratifiedKFold
+
     pos_tr = np.sum(y_train == 1)
     neg_tr = np.sum(y_train == 0)
     n_splits = min(3, pos_tr, neg_tr)
@@ -327,6 +328,10 @@ def _evaluate_repeated_stratified_oof(
     Returns:
         (clf_oof_auc, baseline_oof_auc, oof_probs, best_overall_C)
     """
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.metrics import roc_auc_score
+    from sklearn.model_selection import RepeatedStratifiedKFold
+
     n_samples = len(y)
     rskf = RepeatedStratifiedKFold(n_splits=n_splits, n_repeats=n_repeats, random_state=random_state)
 
@@ -564,6 +569,8 @@ def train_and_evaluate_classifier(
     )
 
     # 6. Fit final model on all effective feedback data
+    from sklearn.linear_model import LogisticRegression
+
     final_model = LogisticRegression(
         C=best_C,
         class_weight="balanced",

@@ -196,6 +196,7 @@ def test_onboarding_releases_web_transaction_before_independent_worker(monkeypat
     from fastapi.testclient import TestClient
     from types import SimpleNamespace
     from research_monitor.ui.app import app, get_db
+    from research_monitor.ui.jobs import processing_slot
 
     engine = create_engine(os.environ["TEST_DATABASE_URL"])
     init_db(engine)
@@ -218,9 +219,14 @@ def test_onboarding_releases_web_transaction_before_independent_worker(monkeypat
         monkeypatch.setattr("subprocess.run", independent_worker)
         try:
             with TestClient(app) as client:
-                response = client.post("/onboard", json={
+                form = {
                     "user_id": uid, "name": "Onboarding regression", "seed_text": "Robotic navigation",
-                })
+                }
+                with processing_slot(engine):
+                    busy = client.post("/onboard", json=form)
+                    assert busy.status_code == 503
+                    assert "already running" in busy.json()["detail"]
+                response = client.post("/onboard", json=form)
             assert response.status_code == 200
             assert response.json()["user_id"] == uid
         finally:

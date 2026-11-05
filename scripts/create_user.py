@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../s
 
 from research_monitor.config import config
 from research_monitor.database.session import SessionLocal, init_db
+from research_monitor.relevance.thresholds import ReferenceEmbeddingsUnavailable
 from research_monitor.relevance.user_manager import create_user
 
 logging.basicConfig(
@@ -109,6 +110,12 @@ def main() -> None:
         print(f"  Daily Run Command:   python scripts/run_daily_monitoring.py --user-id {user.id} --once")
         print("=" * 65 + "\n")
         logger.info("User initialization workflow for user_id='%s' finished successfully in %.2fs", args.user_id, time.perf_counter() - overall_start)
+    except ReferenceEmbeddingsUnavailable:
+        if not args.skip_db_init:
+            raise
+        # Give the web parent a fixed diagnostic without exposing worker output.
+        print(ReferenceEmbeddingsUnavailable.__name__, file=sys.stderr)
+        raise SystemExit(1) from None
     finally:
         session.close()
 

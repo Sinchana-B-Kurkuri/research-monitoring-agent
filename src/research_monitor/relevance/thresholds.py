@@ -16,13 +16,16 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
-import pandas as pd
 from sqlalchemy.orm import Session
 
 from research_monitor.config import config
 from research_monitor.database.models import Paper
 
 logger = logging.getLogger(__name__)
+
+
+class ReferenceEmbeddingsUnavailable(FileNotFoundError):
+    """The database and filesystem do not provide the reference sample."""
 
 
 @dataclass(frozen=True)
@@ -81,11 +84,13 @@ def load_reference_embeddings(
     c_path = Path(corpus_path)
     e_path = Path(embeddings_path)
     if not c_path.exists() or not e_path.exists():
-        raise FileNotFoundError(
+        raise ReferenceEmbeddingsUnavailable(
             f"Cannot load reference embeddings: missing {c_path} or {e_path}."
         )
 
     # Load only 'is_reference' column to avoid loading text/abstract corpus into RAM
+    import pandas as pd
+
     corpus_df = pd.read_parquet(c_path, columns=["is_reference"])
     ref_mask = corpus_df["is_reference"].values
 

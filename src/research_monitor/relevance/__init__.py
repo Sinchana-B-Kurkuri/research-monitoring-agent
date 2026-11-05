@@ -4,6 +4,8 @@ relevance
 Phase 5, 10, and 11 Relevance Agent, Preference Memory, and Classifier.
 """
 
+from importlib import import_module
+
 from .classifier import (
     ClassifierEligibility,
     ClassifierTrainingResult,
@@ -12,14 +14,6 @@ from .classifier import (
     check_classifier_eligibility,
     find_nearest_feedback_papers,
     train_and_evaluate_classifier,
-)
-from .pipeline import (
-    discover_stage,
-    embed_stage,
-    preprocess_stage,
-    route_stage,
-    run_monitoring_cycle,
-    score_stage,
 )
 from .preference import (
     VectorUpdateEligibility,
@@ -33,6 +27,21 @@ from .router import RoutingResult, route_score
 from .state import DecisionStatus, PaperCandidate, PipelineState, Route
 from .thresholds import Thresholds, compute_vector_thresholds, load_reference_embeddings
 from .user_manager import create_user, get_active_vector_version
+
+_PIPELINE_EXPORTS = {
+    "discover_stage", "embed_stage", "preprocess_stage",
+    "route_stage", "run_monitoring_cycle", "score_stage",
+}
+
+
+def __getattr__(name):
+    """Load ingestion dependencies only in callers using the pipeline."""
+    if name not in _PIPELINE_EXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(".pipeline", __name__), name)
+    globals()[name] = value
+    return value
+
 
 __all__ = [
     "Route",
