@@ -54,6 +54,22 @@ def test_personal_link_remembers_only_that_profile_and_supports_back(db_session,
         app.dependency_overrides.clear()
 
 
+def test_hidden_profile_is_unlisted_but_direct_access_still_works(db_session, sample_user, other_user, tmp_path, monkeypatch):
+    hidden = tmp_path / "hidden_pilots.txt"
+    hidden.write_text(f"{sample_user.id}\n", encoding="utf-8")
+    monkeypatch.setattr("research_monitor.ui.portal.HIDDEN_PROFILES_PATH", hidden)
+    try:
+        with client_for(db_session) as client:
+            directory = client.get("/workspace", params={"workspace_key": workspace_key()})
+            assert directory.status_code == 200
+            assert sample_user.name not in directory.text
+            assert other_user.name in directory.text
+            assert sample_user.name not in client.get("/onboard").text
+            assert client.get("/history", params={"token": sample_user.access_token}).status_code == 200
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_monitor_button_is_idempotent_and_job_results_are_private(db_session, sample_user, other_user):
     launches = []
     try:

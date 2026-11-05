@@ -12,16 +12,22 @@ from research_monitor.config import config
 from research_monitor.database.models import (BackgroundJob, Cycle, Digest, FeedbackEvent,
     InterestProfile, InterestVectorVersion, ModelVersion, RoutingDecision, Summary, TrainingLabel, User)
 from research_monitor.ui.jobs import enqueue_job, expire_interrupted_jobs, run_background_job
-from research_monitor.ui.workspace import accessible_profiles, is_operator, workspace_key, OPERATOR_COOKIE
+from research_monitor.ui.workspace import ROOT, accessible_profiles, is_operator, workspace_key, OPERATOR_COOKIE
+
+HIDDEN_PROFILES_PATH = ROOT / "data/local_runtime/hidden_pilots.txt"
 
 
 def profile_cards(request, session):
     profiles = accessible_profiles(request, session)
+    try:
+        hidden_ids = set(HIDDEN_PROFILES_PATH.read_text(encoding="utf-8").split())
+    except FileNotFoundError:
+        hidden_ids = set()
     cycles = dict(session.query(Cycle.user_id, func.count(Cycle.id)).group_by(Cycle.user_id).all())
     digests = dict(session.query(Digest.user_id, func.count(Digest.id)).group_by(Digest.user_id).all())
     labels = dict(session.query(TrainingLabel.user_id, func.count(TrainingLabel.event_id)).group_by(TrainingLabel.user_id).all())
     return [{"user": user, "cycles": cycles.get(user.id, 0), "digests": digests.get(user.id, 0),
-        "labels": labels.get(user.id, 0)} for user in profiles]
+        "labels": labels.get(user.id, 0)} for user in profiles if user.id not in hidden_ids]
 
 
 def personal_stats(user_id, session):

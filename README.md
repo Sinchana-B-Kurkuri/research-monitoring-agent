@@ -65,6 +65,8 @@ From another terminal, `Invoke-RestMethod http://127.0.0.1:8000/health` checks t
 4. Use **Review** to handle borderline papers and **Digest** to read delivered papers and provide feedback. **Audit** shows discarded papers, and **History** shows earlier cycles and feedback. **Back to pilots** returns to the workspace and its saved links.
 5. Use **Evaluation** to run the available-data report. The report records label coverage and distinguishes partial results from the complete frozen evaluation.
 
+To hide a pilot from the workspace and preference picker, put its ID on its own line in `data/local_runtime/hidden_pilots.txt`. This setting stays local and preserves the pilot's history and research records.
+
 For a terminal-based demonstration, replace `researcher` with an existing pilot ID:
 
 ```powershell
