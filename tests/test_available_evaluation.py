@@ -28,5 +28,3 @@ def test_available_data_report_runs_without_fabricating_missing_labels(db_sessio
     strict = evaluation.run_final_evaluation_suite(db_session=db_session, results_dir=tmp_path/"strict",
         pilot_export_dir=tmp_path/"strict_export", survey_dir=tmp_path/"surveys", allow_partial_labels=False)
     assert strict["e1_gate_quality"]["status"] == "BLOCKED_INCOMPLETE_DATA"
-
-

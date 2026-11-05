@@ -57,5 +57,3 @@ def test_saved_preferences_are_updated_before_the_next_cycle_is_scored(db_sessio
     with patch("research_monitor.relevance.preference.update_user_interest_vector",side_effect=vector), patch("research_monitor.relevance.classifier.train_and_evaluate_classifier",side_effect=classifier), patch("scripts.run_daily_monitoring.run_live_cycle",side_effect=ingest), patch("scripts.run_daily_monitoring.resume_after_review",return_value=(SimpleNamespace(items=[]),False)):
         status,_,_=execute_daily_cycle_for_user(sample_user,db_session,["cs.AI"],10,1)
     assert status == "[CYCLE_EMPTY]"
-
-

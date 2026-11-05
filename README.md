@@ -6,6 +6,8 @@ The existing architecture is retained: a Python state machine, FastAPI/Jinja2/HT
 
 **Start with [the dashboard workflow guide](docs/DASHBOARD_WORKFLOW.md).** It explains the private pilot directory, saved links, browser monitoring buttons, history, preference imports, and available-data evaluation. [Backend repairs](docs/BACKEND_REPAIRS.md) contains diagnostics and terminal verification commands. [The earlier codebase analysis](docs/CODEBASE_ANALYSIS.md) records the pre-repair findings.
 
+See the [repository audit and map](docs/REPOSITORY_AUDIT.md), [Render deployment guide](docs/RENDER_DEPLOYMENT.md), and [abstract, initial report, and final report](docs/reports/README.md).
+
 ## Quick start
 
 ```powershell
@@ -25,7 +27,7 @@ Set DATABASE_URL in .env before initialization. The default Compose URL is postg
 
 Save the personal review/digest/audit links printed by create_user.py. Missing tokens return 401, foreign resources return 403, and anonymous registration using an existing user ID returns 409. Access logs redact bearer tokens.
 
-The web launcher also prints a private operator workspace link. Open it once to recover all local profiles and their personal links in your browser. Each profile's Dashboard now starts monitoring with a button, retains background progress, and links to paginated session/feedback history. Returning to Pilots & initialization preserves accessible profiles. Optional preference inheritance copies effective feedback only from a source profile you explicitly choose.
+The local web launcher also prints a private operator workspace link. Open it once to recover all local profiles and their personal links in your browser. Each profile's Dashboard starts monitoring with a button, retains background progress, and links to paginated session/feedback history. **Back to pilots** returns to the workspace; the initialization page contains the form and optional preference-source selector. Preference inheritance copies effective feedback only from a source profile you explicitly choose.
 
 ## Monitoring and summaries
 
@@ -53,4 +55,4 @@ Historical paper drafts and result tables have not been regenerated and must not
 
 ## Scheduling and deployment
 
-The daily runner supports --user-id all --once or --daemon --interval-hours 24 and can run under Task Scheduler/cron. Compose starts PostgreSQL only; this repository does not provision a hosted scheduler. Web, worker, and database remain separate processes. Hosted memory, latency, live arXiv availability, and Gemini output quality require deployment-specific verification.
+The daily runner supports `--user-id all --once` or `--daemon --interval-hours 24` and can run under Task Scheduler/cron. Compose starts PostgreSQL only; this repository does not provision a hosted scheduler. See [Render deployment](docs/RENDER_DEPLOYMENT.md) for publishing `main` and checking the existing hosted service.

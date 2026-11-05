@@ -272,7 +272,7 @@ A total of **171 publications** were manually labeled by domain experts using a 
 - `somewhat` ($y=0$ in primary, $y=1$ in lenient): Shares peripheral topical overlap or related methodology.
 - `not_relevant` ($y=0$): Completely outside the researcher's scope.
 
-The labeled dataset was partitioned into a **70% Development Split** (121 papers) and a **30% Test Split** (50 papers) stratified across S1–S5 using fixed random seed 42. The test split was permanently frozen prior to experiment execution. Every test set evaluation was audited through an immutable log file ([`test_access.log`](../../../experiments/results/test_access.log)).
+The labeled dataset was partitioned into a **70% Development Split** (121 papers) and a **30% Test Split** (50 papers) stratified across S1–S5 using fixed random seed 42. The test split was permanently frozen prior to experiment execution. Every test set evaluation was audited through an immutable log file (`test_access.log`).
 
 The label distribution across splits satisfies all predefined roadmap quotas:
 - Total labeled papers: 171

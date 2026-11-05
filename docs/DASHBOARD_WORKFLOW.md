@@ -8,11 +8,11 @@ The operator workspace lists every profile on this installation, including clear
 
 Ordinary personal links retain profile-level isolation. Opening one remembers that profile in this browser; anonymous visitors cannot list other profiles or recover their credentials. The browser's saved-profile cookie stores at most twelve bearer tokens, is HttpOnly, and lasts up to one year. Deleting cookies does not delete database records; the private operator workspace can recover links again.
 
-Every personal page has **Pilots & initialization**, **Workspace**, **Dashboard**, **Review Queue**, **Digest**, **Audit**, **History**, and **Evaluation** navigation. Returning to initialization shows the profiles this browser can access alongside the new-profile form.
+Personal pages have **Dashboard**, **Review queue**, **Digest**, **Audit**, **History**, and **Evaluation** tabs. **Back to pilots** returns to the workspace, which lists accessible profiles. **Initialize a pilot** opens the form without repeating the profile cards.
 
 ## Initialize and monitor
 
-1. Open **Pilots & initialization** and complete the form.
+1. From the workspace, open **Initialize a pilot** and complete the form.
 2. Optionally choose a source profile under **Preference memory**. Only profiles you can access are offered. This copies effective labels as explicitly inherited memory; it does not alter the source profile or manufacture new human participation.
 3. Open **Dashboard & settings**. Choose arXiv categories, a recent-day window (1–30 days), and a paper limit (1–50). Category suggestions include AI, robotics/vision, and materials/applied physics, using the [arXiv taxonomy](https://arxiv.org/category_taxonomy). The existing historical reference corpus remains AI-focused, so relevance thresholds outside that domain still require domain-specific validation.
 4. Press **Start monitoring session**. No processing command needs to be copied into a terminal. The initialization success page also has a start button using the configured default categories.
@@ -53,7 +53,7 @@ Reports from browser jobs are isolated under ignored `data/web_evaluations/<job-
 
 ## Verification
 
-The shared UI uses only `#001C30`, `#176B87`, `#64CCC5`, and `#DAFFFB`, with transparent variations for borders and backgrounds. The header identifies the current pilot; six tabs switch between its pages. Back links sit above the page title, separately from the tabs. Saved pilots are available from the workspace and initialization page.
+The shared UI uses a warm light palette with white panels, tan borders and accents, and a dark brown header. The header identifies the current pilot; six tabs switch between its pages. Back links sit above the page title, separately from the tabs.
 
 History is an ordered sequence of monitoring sessions, feedback, and processing activity. Evaluation is an ordered sequence of activity, the evaluation action, and results. Records use compact rows; benchmark details expand on demand. The stylesheet supports narrow screens, visible keyboard focus, a skip link, and reduced motion.
 
