@@ -19,6 +19,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from research_monitor.config import config
 from research_monitor.database.models import (
     Base,
     Cycle,
@@ -170,6 +171,7 @@ def test_onboard_page_renders_form(client):
     """GET /onboard renders the researcher onboarding form."""
     response = client.get("/onboard")
     assert response.status_code == 200
+    assert response.headers["Referrer-Policy"] == "strict-origin"
     assert "Initialize a pilot" in response.text
     assert "User Identifier" in response.text
     assert "Research Interests" in response.text
@@ -198,11 +200,25 @@ def test_onboard_post_missing_fields_validation(client):
         headers={"Accept": "application/json"},
     )
     assert response.status_code == 400
+    assert response.headers["Referrer-Policy"] == "no-referrer"
     assert "required" in response.json()["detail"].lower()
 
 
-def test_onboard_post_success(client, db_session):
-    """POST /onboard successfully registers user via subprocess delegation and returns token."""
+@pytest.mark.parametrize(
+    ("internal_url", "origin", "public_origin", "form_submission"),
+    [
+        pytest.param("http://testserver", "http://testserver", "", False, id="local-json"),
+        pytest.param("http://testserver", "http://testserver", "", True, id="local-browser-form"),
+        pytest.param("https://pilot.example", "https://pilot.example", "", True, id="https-browser-form"),
+        pytest.param(
+            "http://pilot.example", "https://pilot.example", "https://pilot.example", True,
+            id="tls-terminating-proxy-form",
+        ),
+    ],
+)
+def test_onboard_post_success(client, db_session, monkeypatch, internal_url, origin, public_origin, form_submission):
+    """Same-origin onboarding succeeds even if the trusted public HTTPS URL arrives over HTTP."""
+    monkeypatch.setattr(config, "PUBLIC_ORIGIN", public_origin)
     with patch("subprocess.run") as mock_run:
         # Simulate successful create_user.py subprocess run
         def side_effect(cmd, **kwargs):
@@ -223,23 +239,61 @@ def test_onboard_post_success(client, db_session):
 
         mock_run.side_effect = side_effect
 
-        response = client.post(
-            "/onboard",
-            json={
-                "user_id": "new_pilot_bob",
-                "name": "Dr. Bob Smith",
-                "seed_text": "Causal inference and agentic planning systems.",
-            },
-            headers={"Accept": "application/json"},
-        )
+        fields = {
+            "user_id": "new_pilot_bob",
+            "name": "Dr. Bob Smith",
+            "seed_text": "Causal inference and agentic planning systems.",
+        }
+        headers = {"Origin": origin, "Sec-Fetch-Site": "same-origin"}
+        url = f"{internal_url}/onboard"
+        if form_submission:
+            response = client.post(url, data=fields, headers=headers)
+        else:
+            response = client.post(url, json=fields, headers={**headers, "Accept": "application/json"})
 
         assert response.status_code == 200
+        mock_run.assert_called_once()
+        if form_submission:
+            assert "Pilot Profile Initialized" in response.text
+            assert response.headers["Referrer-Policy"] == "strict-origin"
+            assert db_session.get(User, fields["user_id"]) is not None
+            return
         data = response.json()
         assert data["status"] == "ok"
         assert data["user_id"] == "new_pilot_bob"
         assert data["access_token"] == "bob_token_secure_999"
         assert f"token={data['access_token']}" in data["review_url"]
         assert f"token={data['access_token']}" in data["digest_url"]
+
+
+@pytest.mark.parametrize(
+    ("internal_url", "origin", "fetch_site", "public_origin"),
+    [
+        pytest.param("http://pilot.example", "https://other.example", "same-site", "https://pilot.example", id="foreign-origin"),
+        pytest.param("https://pilot.example", "null", "same-origin", "https://pilot.example", id="opaque-origin"),
+        pytest.param("http://pilot.example", "https://pilot.example", "cross-site", "https://pilot.example", id="cross-site-metadata"),
+        pytest.param("http://other.example", "https://pilot.example", "same-origin", "https://pilot.example", id="wrong-host"),
+        pytest.param("http://pilot.example:8080", "https://pilot.example", "same-origin", "https://pilot.example", id="wrong-port"),
+        pytest.param("http://pilot.example", "http://pilot.example", "same-origin", "https://pilot.example", id="wrong-scheme"),
+        pytest.param("http://pilot.example", "https://pilot.example", "same-origin", "", id="untrusted-forwarding-headers"),
+    ],
+)
+def test_onboard_post_rejects_cross_site_before_worker(client, monkeypatch, internal_url, origin, fetch_site, public_origin):
+    monkeypatch.setattr(config, "PUBLIC_ORIGIN", public_origin)
+    with patch("subprocess.run") as worker:
+        response = client.post(
+            f"{internal_url}/onboard",
+            data={"user_id": "blocked_pilot", "name": "Blocked Pilot", "seed_text": "Robotics"},
+            headers={
+                "Origin": origin,
+                "Sec-Fetch-Site": fetch_site,
+                "X-Forwarded-Proto": "https",
+                "X-Forwarded-Host": "pilot.example",
+            },
+        )
+    assert response.status_code == 403
+    assert response.json() == {"detail": "Cross-site actions are not allowed."}
+    worker.assert_not_called()
 
 
 # =========================================================================

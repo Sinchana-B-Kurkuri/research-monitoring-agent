@@ -85,10 +85,22 @@ app.mount("/static", StaticFiles(directory=str(TEMPLATES_DIR.parent / "static"))
 async def protect_personal_links(request, call_next):
     if request.method not in {"GET", "HEAD", "OPTIONS"}:
         origin = request.headers.get("origin")
-        if request.headers.get("sec-fetch-site") == "cross-site" or (origin and origin != str(request.base_url).rstrip("/")):
+        expected_origin = str(request.base_url).rstrip("/")
+        public_origin = config.PUBLIC_ORIGIN
+        # A TLS terminator can leave ASGI's scheme as HTTP. Restore HTTPS only
+        # for the configured public authority, never from client-supplied headers.
+        if public_origin.startswith("https://") and expected_origin == public_origin.replace("https://", "http://", 1):
+            expected_origin = public_origin
+        if request.headers.get("sec-fetch-site") == "cross-site" or (origin and origin != expected_origin):
             return JSONResponse({"detail": "Cross-site actions are not allowed."}, status_code=403)
     response = await call_next(request)
-    response.headers["Referrer-Policy"] = "no-referrer"
+    # Let the native onboarding form send its actual Origin while keeping
+    # paths and query strings out of the Referer header.
+    is_onboarding_html = (
+        request.url.path == "/onboard"
+        and response.headers.get("content-type", "").startswith("text/html")
+    )
+    response.headers["Referrer-Policy"] = "strict-origin" if is_onboarding_html else "no-referrer"
     response.headers["Cache-Control"] = "no-store"
     response.headers["X-Frame-Options"] = "DENY"
     token = getattr(request.state, "profile_token", None)

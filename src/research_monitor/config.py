@@ -75,6 +75,7 @@ class Config:
     # Phase 9: Production Deployment & Pilot Launch configuration
     PORT = int(os.getenv("PORT", "8000"))
     HOST = os.getenv("HOST", "0.0.0.0")
+    PUBLIC_ORIGIN = (os.getenv("PUBLIC_ORIGIN") or os.getenv("RENDER_EXTERNAL_URL", "")).strip().rstrip("/")
     WEB_CONCURRENCY = int(os.getenv("WEB_CONCURRENCY", "1"))
     DAILY_INGESTION_MAX_PAPERS = int(os.getenv("DAILY_INGESTION_MAX_PAPERS", "50"))
     REVIEW_QUEUE_MAX_TASKS = int(os.getenv("REVIEW_QUEUE_MAX_TASKS", "15"))
